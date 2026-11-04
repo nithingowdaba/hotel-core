@@ -28,6 +28,11 @@ function getPool() {
     }
 
     pool = mysql.createPool(config);
+    pool.on('connection', (connection) => {
+      connection.query("SET time_zone = '+00:00'", (error) => {
+        if (error) connection.destroy();
+      });
+    });
   }
   return pool;
 }

@@ -161,8 +161,8 @@ router.post('/:hotelId/menu-items', [
   } = req.body;
   try {
     const [result] = await dbQuery(
-      `INSERT INTO menu_items (hotel_id, name, description, category, price, is_veg, image_url, is_available)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO menu_items SET hotel_id = ?, name = ?, description = ?, category = ?,
+       price = ?, is_veg = ?, image_url = ?, is_available = ?`,
       [req.hotel.id, name, description, category, priceAsDecimal(price), isVeg, imageUrl, isAvailable],
     );
     const [rows] = await dbQuery(`SELECT ${fields} FROM menu_items WHERE id = ? AND hotel_id = ?`, [result.insertId, req.hotel.id]);

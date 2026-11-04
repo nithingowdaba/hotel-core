@@ -11,9 +11,11 @@ const { apiLimiter } = require('./src/middleware/rateLimit');
 const errorHandler = require('./middleware/errorHandler');
 const healthRouter = require('./routes/health');
 const routes = require('./src/routes');
+const { recordRequest, setRoutePrefix } = require('./src/middleware/metrics');
 
 const app = express();
 app.set('trust proxy', 1);
+app.use(recordRequest);
 
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use(helmet({
@@ -56,7 +58,7 @@ app.use(
 );
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.use('/health', healthRouter);
+app.use('/health', setRoutePrefix, healthRouter);
 app.use('/api', routes);
 
 // 404 handler for unmatched routes

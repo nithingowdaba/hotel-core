@@ -14,6 +14,7 @@
     "db:reset": "node scripts/init-db.js && node scripts/seed-db.js",
     "migrate": "node scripts/migrate.js",
     "db:schema": "node scripts/db-schema.js",
+    "db:explain": "node scripts/explain.js",
     "seed": "node scripts/seed.js"
   },
   "keywords": [],

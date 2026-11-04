@@ -5,6 +5,7 @@ const { body, query } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const { query: dbQuery, withTransaction } = require('../config/db');
 const { authenticate } = require('../middleware/auth');
+const { snapshot: metricsSnapshot } = require('../middleware/metrics');
 const { asyncHandler, single, collection, httpError } = require('../utils/http');
 const {
   positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody,
@@ -13,6 +14,20 @@ const {
 
 const router = Router();
 router.use(authenticate, requirePlatformAdmin);
+
+/** @openapi
+ * /api/platform/metrics:
+ *   get:
+ *     tags: [Platform]
+ *     summary: Get in-memory request metrics
+ *     responses:
+ *       200: { description: Per-route request counts and latency percentiles }
+ *       401: { description: Authentication required }
+ *       403: { description: Platform administrator access required }
+ */
+router.get('/metrics', rejectUnknownQuery([]), validate, (req, res) => {
+  single(res, metricsSnapshot());
+});
 const nullableText = (field, max) => body(field).optional({ nullable: true })
   .isString().isLength({ max });
 const slugRule = (field, optional = true) => {

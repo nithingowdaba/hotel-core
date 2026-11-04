@@ -330,3 +330,50 @@ test('non-platform users cannot access platform administration', async () => {
   const response = await request('/api/platform/hotels', { token: tokens.customer });
   assert.equal(response.status, 403);
 });
+
+test('orders, customer history, hotel transitions, reports, and metrics enforce scope', async () => {
+  const created = await request(`/api/hotels/${ids.hotelA}/orders`, {
+    method: 'POST', token: tokens.customer,
+    body: { payment_method: 'upi', items: [
+      { menu_item_id: ids.itemA, quantity: 2 }, { menu_item_id: ids.itemA, quantity: 1 },
+    ] },
+  });
+  assert.equal(created.status, 201);
+  const order = (await created.json()).data;
+  assert.equal(order.total_amount, '150.00');
+  assert.equal(order.items.length, 1);
+  assert.equal(order.items[0].quantity, 3);
+
+  const own = await request('/api/me/orders', { token: tokens.customer });
+  assert.equal(own.status, 200);
+  assert.ok((await own.json()).data.some((item) => item.id === order.id));
+  const hidden = await request(`/api/me/orders/${order.id}`, { token: tokens.adminA });
+  assert.equal(hidden.status, 404);
+
+  const wrongTenant = await request(`/api/hotels/${ids.hotelB}/orders/${order.id}`, { token: tokens.adminB });
+  assert.equal(wrongTenant.status, 404);
+  const complete = await request(`/api/hotels/${ids.hotelA}/orders/${order.id}/status`, {
+    method: 'PATCH', token: tokens.adminA, body: { status: 'completed' },
+  });
+  assert.equal(complete.status, 200);
+
+  const date = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const sales = await request(`/api/hotels/${ids.hotelA}/reports/daily-sales?date=${date}`, { token: tokens.adminA });
+  assert.equal(sales.status, 200);
+  assert.equal((await sales.json()).data.completed_order_count, 1);
+  const top = await request(`/api/hotels/${ids.hotelA}/reports/top-selling-items?from=${date}&to=${date}`, { token: tokens.adminA });
+  assert.equal(top.status, 200);
+  assert.equal((await top.json()).data[0].quantity_sold, 3);
+
+  const invalidFields = await request(`/api/hotels/${ids.hotelA}/orders`, {
+    method: 'POST', token: tokens.customer,
+    body: { payment_method: 'cash', items: [{ menu_item_id: ids.itemA, quantity: 1, price: 0 }] },
+  });
+  assert.equal(invalidFields.status, 400);
+  const cancellation = await request(`/api/me/orders/${order.id}/cancel`, { method: 'PATCH', token: tokens.customer });
+  assert.equal(cancellation.status, 409);
+
+  const metrics = await request('/api/platform/metrics', { token: tokens.platform });
+  assert.equal(metrics.status, 200);
+  assert.ok((await metrics.json()).data.routes.some((route) => route.route.includes('/api/hotels/:hotelId/orders')));
+});

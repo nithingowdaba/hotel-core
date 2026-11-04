@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const spec = require('../config/swagger');
 
-test('Swagger spec documents the Step 3 hotel, menu, and platform routes', () => {
+test('Swagger spec documents hotel, menu, platform, order, report, and health routes', () => {
   const expected = {
     '/api/hotels': ['get'],
     '/api/hotels/{hotelId}': ['get', 'patch'],
@@ -16,6 +16,18 @@ test('Swagger spec documents the Step 3 hotel, menu, and platform routes', () =>
     '/api/platform/hotels/{hotelId}': ['patch'],
     '/api/platform/hotels/{hotelId}/admins': ['get', 'post'],
     '/api/platform/hotels/{hotelId}/admins/{userId}': ['delete'],
+    '/api/hotels/{hotelId}/orders': ['get', 'post'],
+    '/api/hotels/{hotelId}/orders/{orderId}': ['get'],
+    '/api/hotels/{hotelId}/orders/{orderId}/status': ['patch'],
+    '/api/hotels/{hotelId}/orders/{orderId}/cancel': ['patch'],
+    '/api/me/orders': ['get'],
+    '/api/me/orders/{orderId}': ['get'],
+    '/api/me/orders/{orderId}/cancel': ['patch'],
+    '/api/hotels/{hotelId}/reports/daily-sales': ['get'],
+    '/api/hotels/{hotelId}/reports/top-selling-items': ['get'],
+    '/api/platform/metrics': ['get'],
+    '/health': ['get'],
+    '/health/ready': ['get'],
   };
 
   for (const [path, methods] of Object.entries(expected)) {
@@ -24,6 +36,9 @@ test('Swagger spec documents the Step 3 hotel, menu, and platform routes', () =>
   }
   assert.deepEqual(spec.paths['/api/hotels/{hotelId}/menu-items'].post.requestBody.required, true);
   assert.deepEqual(spec.paths['/api/platform/hotels/{hotelId}/admins'].post.requestBody.required, true);
+  const createOrder = spec.paths['/api/hotels/{hotelId}/orders'].post;
+  assert.equal(createOrder.requestBody.content['application/json'].schema.required.includes('items'), true);
+  assert.equal(createOrder.security[0].bearerAuth.length, 0);
   assert.ok(spec.components.securitySchemes.bearerAuth);
   assert.ok(spec.security.some((requirement) => requirement.bearerAuth));
 });
