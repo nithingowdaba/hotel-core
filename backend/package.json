@@ -10,7 +10,10 @@
     "create-admin": "node scripts/create-admin.js",
     "db:init": "node scripts/init-db.js",
     "db:seed": "node scripts/seed-db.js",
-    "db:reset": "node scripts/init-db.js && node scripts/seed-db.js"
+    "db:reset": "node scripts/init-db.js && node scripts/seed-db.js",
+    "migrate": "node scripts/migrate.js",
+    "db:schema": "node scripts/db-schema.js",
+    "seed": "node scripts/seed.js"
   },
   "keywords": [],
   "author": "",
