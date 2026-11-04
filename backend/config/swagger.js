@@ -78,7 +78,7 @@ const options = {
       { name: 'Orders', description: 'Order management (customer)' },
     ],
   },
-  apis: ['./routes/**/*.js', './routes/*.js'],
+  apis: ['./routes/**/*.js', './routes/*.js', './src/routes/**/*.js', './src/routes/*.js'],
 };
 
 const swaggerSpec = swaggerJsdoc(options);

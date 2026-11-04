@@ -7,34 +7,43 @@ const swaggerUi = require('swagger-ui-express');
 
 const env = require('./config/env');
 const swaggerSpec = require('./config/swagger');
-const { defaultLimiter } = require('./middleware/rateLimiter');
+const { apiLimiter } = require('./src/middleware/rateLimit');
 const errorHandler = require('./middleware/errorHandler');
 const healthRouter = require('./routes/health');
+const routes = require('./src/routes');
 
 const app = express();
+app.set('trust proxy', 1);
 
 // ── Security headers ──────────────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'script-src': ["'self'"],
+      'style-src': ["'self'"],
+      'img-src': ["'self'", 'https:', 'data:'],
+    },
+  },
+}));
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-const allowedOrigins =
-  env.nodeEnv === 'production'
-    ? (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim())
-    : ['http://localhost:5173', 'http://localhost:4173'];
-
-app.use(
-  cors({
-    origin: allowedOrigins,
+const allowedOrigins = env.corsOrigin.split(',').map((origin) => origin.trim()).filter(Boolean);
+if (allowedOrigins.length) {
+  app.use(cors({
+    origin(origin, callback) {
+      callback(null, !origin || allowedOrigins.includes(origin));
+    },
     credentials: true,
-  }),
-);
+  }));
+}
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-app.use(defaultLimiter);
+app.use(apiLimiter);
 
 // ── Body parsing ──────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // ── Swagger UI ────────────────────────────────────────────────────────────────
 app.use(
@@ -48,6 +57,7 @@ app.use(
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/health', healthRouter);
+app.use('/api', routes);
 
 // 404 handler for unmatched routes
 app.use((req, res) => {

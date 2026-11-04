@@ -12,10 +12,11 @@ before(async () => {
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test_secret_hotel_core_testing_only';
   process.env.DB_HOST = '127.0.0.1';
+  process.env.DB_PORT = '3306';
   process.env.DB_USER = 'test';
   process.env.DB_PASSWORD = 'test';
-  process.env.DB_NAME = 'test';
-  process.env.PORT = '0'; // OS assigns a random free port
+  process.env.DB_NAME = 'hotel_core_test';
+  process.env.DB_POOL_SIZE = '10';
 
   const app = require('../app');
   await new Promise((resolve) => {

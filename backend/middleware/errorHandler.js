@@ -1,7 +1,6 @@
 'use strict';
 
 const { sendError } = require('../utils/response');
-const env = require('../config/env');
 
 /**
  * Centralized Express error handling middleware.
@@ -35,10 +34,7 @@ function errorHandler(err, req, res, next) {
   // Unknown/programming errors — do not leak details in production
   console.error('[errorHandler] Unhandled error:', err);
 
-  const message =
-    env.nodeEnv === 'development' ? err.message : 'An unexpected error occurred.';
-
-  return sendError(res, 500, 'INTERNAL_ERROR', message);
+  return sendError(res, 500, 'INTERNAL_ERROR', 'An unexpected error occurred.');
 }
 
 module.exports = errorHandler;
