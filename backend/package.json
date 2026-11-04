@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test --test-concurrency=1",
+    "verify": "npm test && find .. -type d \\( -path '*/node_modules' -o -path '*/.git' \\) -prune -o -type f -name '*.js' -print0 | xargs -0 -r -n1 node --check && git diff --check && git diff --cached --check",
     "create-platform-admin": "node scripts/create-platform-admin.js",
     "db:init": "node scripts/init-db.js",
     "db:seed": "node scripts/seed-db.js",
