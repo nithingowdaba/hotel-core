@@ -25,9 +25,64 @@ const registrationValidation = [
  *     tags: [Auth]
  *     summary: Register a customer account
  *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [full_name, email, phone, password]
+ *             properties:
+ *               full_name:
+ *                 type: string
+ *                 minLength: 1
+ *                 maxLength: 120
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 maxLength: 255
+ *               phone:
+ *                 type: string
+ *                 minLength: 1
+ *                 maxLength: 20
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *                 maxLength: 72
  *     responses:
- *       201: { description: Customer account created }
- *       409: { description: Email is already in use }
+ *       201:
+ *         description: Customer account created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       required: [id, full_name, email, phone, role]
+ *                       properties:
+ *                         id: { type: integer }
+ *                         full_name: { type: string }
+ *                         email: { type: string, format: email }
+ *                         phone: { type: string }
+ *                         role: { type: string, enum: [CUSTOMER], example: CUSTOMER }
+ *       400:
+ *         description: Request validation failed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Email is already in use
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       500:
+ *         description: Unexpected server error
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/register', authLimiter, registrationValidation, validate, asyncHandler(async (req, res) => {
   const fullName = req.body.full_name.trim();
@@ -53,9 +108,61 @@ router.post('/register', authLimiter, registrationValidation, validate, asyncHan
  *     tags: [Auth]
  *     summary: Log in
  *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 maxLength: 255
+ *               password:
+ *                 type: string
+ *                 minLength: 1
+ *                 maxLength: 72
  *     responses:
- *       200: { description: Login successful }
- *       401: { description: Invalid credentials or inactive account }
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       required: [token, user]
+ *                       properties:
+ *                         token: { type: string, description: JWT access token }
+ *                         user:
+ *                           type: object
+ *                           required: [id, full_name, email, phone, role]
+ *                           properties:
+ *                             id: { type: integer }
+ *                             full_name: { type: string }
+ *                             email: { type: string, format: email }
+ *                             phone: { type: string }
+ *                             role: { type: string }
+ *       400:
+ *         description: Request validation failed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       401:
+ *         description: Invalid credentials or inactive account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       500:
+ *         description: Unexpected server error
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/login', authLimiter, [
   body('email').trim().isEmail().isLength({ max: 255 }),
@@ -89,9 +196,45 @@ router.post('/login', authLimiter, [
  *   get:
  *     tags: [Auth]
  *     summary: Return the authenticated user and hotel memberships
+ *     security:
+ *       - bearerAuth: []
  *     responses:
- *       200: { description: Authenticated user }
- *       401: { description: Authentication required }
+ *       200:
+ *         description: Authenticated user and hotel memberships
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         id: { type: integer }
+ *                         full_name: { type: string }
+ *                         email: { type: string, format: email }
+ *                         phone: { type: string }
+ *                         role: { type: string }
+ *                         admin_of:
+ *                           type: array
+ *                           items:
+ *                             type: object
+ *                             required: [hotel_id, name, slug]
+ *                             properties:
+ *                               hotel_id: { type: integer }
+ *                               name: { type: string }
+ *                               slug: { type: string }
+ *       401:
+ *         description: Authentication required or token is invalid or expired
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       500:
+ *         description: Unexpected server error
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/me', authenticate, asyncHandler(async (req, res) => {
   const [memberships] = await query(

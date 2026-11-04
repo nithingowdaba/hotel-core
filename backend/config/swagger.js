@@ -1,6 +1,7 @@
 'use strict';
 
 const swaggerJsdoc = require('swagger-jsdoc');
+const path = require('path');
 
 const options = {
   definition: {
@@ -78,7 +79,14 @@ const options = {
       { name: 'Orders', description: 'Order management (customer)' },
     ],
   },
-  apis: ['./routes/**/*.js', './routes/*.js', './src/routes/**/*.js', './src/routes/*.js'],
+  // Resolve from this config file so route annotations are found regardless of
+  // the process working directory (including the authentication route module).
+  apis: [
+    path.resolve(__dirname, '../routes/**/*.js'),
+    path.resolve(__dirname, '../routes/*.js'),
+    path.resolve(__dirname, '../src/routes/**/*.js'),
+    path.resolve(__dirname, '../src/routes/*.js'),
+  ],
 };
 
 const swaggerSpec = swaggerJsdoc(options);
