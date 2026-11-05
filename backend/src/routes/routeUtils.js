@@ -85,6 +85,10 @@ function normalizeHotel(row) {
   return { ...row, accepting_orders: Boolean(row.accepting_orders) };
 }
 
+function escapeLike(value) {
+  return value.replace(/[!%_\\]/g, (character) => `!${character}`);
+}
+
 function requirePlatformAdmin(req, res, next) {
   if (req.user?.role !== 'PLATFORM_ADMIN') {
     return next(httpError(403, 'FORBIDDEN', 'Platform administrator access is required.'));
@@ -104,6 +108,7 @@ module.exports = {
   priceAsDecimal,
   normalizeMenuItem,
   normalizeHotel,
+  escapeLike,
   requirePlatformAdmin,
   validate,
 };

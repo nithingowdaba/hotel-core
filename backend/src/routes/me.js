@@ -25,23 +25,27 @@ function itemSummary(items) {
  *     parameters:
  *       - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
  *       - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
- *       - { in: query, name: status, schema: { type: string, enum: [pending, completed, cancelled] } }
+ *       - { in: query, name: status, schema: { type: string, enum: [pending, completed, cancelled, past] } }
  *     responses:
  *       200: { description: Paginated customer orders with hotel and item summaries }
  *       401: { description: Authentication required }
  */
-router.get('/orders', [rejectUnknownQuery(['page', 'limit', 'status']), ...paginationRules(), query('status').optional().isIn(['pending', 'completed', 'cancelled']), validate], asyncHandler(async (req, res) => {
+router.get('/orders', [rejectUnknownQuery(['page', 'limit', 'status']), ...paginationRules(), query('status').optional().isIn(['pending', 'completed', 'cancelled', 'past']), validate], asyncHandler(async (req, res) => {
   const { page, limit, offset } = pagination(req);
   const status = req.query.status || null;
   const where = `o.user_id = ? AND (? IS NULL OR
     (? = 'cancelled' AND o.cancelled_at IS NOT NULL) OR
     (? = 'completed' AND o.status = 'completed' AND o.cancelled_at IS NULL) OR
-    (? = 'pending' AND o.status = 'pending' AND o.cancelled_at IS NULL))`;
-  const args = [req.user.id, status, status, status, status];
+    (? = 'pending' AND o.status = 'pending' AND o.cancelled_at IS NULL) OR
+    (? = 'past' AND (o.cancelled_at IS NOT NULL OR o.status = 'completed')))`;
+  const args = [req.user.id, status, status, status, status, status];
+  const [[countRow]] = await dbQuery(
+    `SELECT COUNT(*) AS total FROM orders o JOIN hotels h ON h.id = o.hotel_id WHERE ${where}`,
+    args,
+  );
   const [rows] = await dbQuery(
     `SELECT o.id, o.hotel_id, o.user_id, o.customer_name, o.phone, o.payment_method, o.total_amount,
             o.status, o.cancelled_at, o.created_at, h.name AS hotel_name, h.slug AS hotel_slug, h.logo_url AS hotel_logo_url
-            , COUNT(*) OVER() AS total_count
      FROM orders o JOIN hotels h ON h.id = o.hotel_id
      WHERE ${where} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`, [...args, limit, offset],
   );
@@ -69,7 +73,7 @@ router.get('/orders', [rejectUnknownQuery(['page', 'limit', 'status']), ...pagin
       item_count: orderItems.length, items_summary: itemSummary(orderItems),
     };
   });
-  collection(res, data, { page, limit, total: rows.length ? Number(rows[0].total_count) : 0 });
+  collection(res, data, { page, limit, total: Number(countRow.total) });
 }));
 
 /** @openapi

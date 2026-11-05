@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "lint": "eslint src --max-warnings=0",
     "preview": "vite preview",
     "test": "vitest run",
     "check:size": "node scripts/check-size.js"
@@ -24,6 +25,9 @@
     "@testing-library/user-event": "14.5.2",
     "@vitejs/plugin-react": "5.2.0",
     "autoprefixer": "10.4.21",
+    "eslint": "9.39.5",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "5.2.0",
     "jsdom": "25.0.1",
     "postcss": "8.5.32",
     "tailwindcss": "3.4.17",

@@ -8,7 +8,7 @@ const { resolveHotel, requireHotelAdmin } = require('../middleware/tenant');
 const { asyncHandler, single, collection, httpError } = require('../utils/http');
 const {
   positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody,
-  httpsUrlRule, booleanRule, normalizeHotel, normalizeMenuItem, validate,
+  httpsUrlRule, booleanRule, normalizeHotel, normalizeMenuItem, escapeLike, validate,
 } = require('./routeUtils');
 
 const router = Router();
@@ -56,9 +56,9 @@ router.get('/', [
   ...paginationRules(), validate,
 ], asyncHandler(async (req, res) => {
   const { page, limit, offset } = pagination(req);
-  const search = req.query.search ? `%${req.query.search}%` : null;
+  const search = req.query.search ? `%${escapeLike(req.query.search)}%` : null;
   const values = [search, search, search];
-  const where = `status = 'active' AND (? IS NULL OR name LIKE ? OR cuisines LIKE ?)`;
+  const where = `status = 'active' AND (? IS NULL OR name LIKE ? ESCAPE '!' OR cuisines LIKE ? ESCAPE '!')`;
   const [countRows] = await dbQuery(`SELECT COUNT(*) AS total FROM hotels WHERE ${where}`, values);
   const [rows] = await dbQuery(
     `SELECT id, name, slug, description, cuisines, address, logo_url, cover_url, accepting_orders

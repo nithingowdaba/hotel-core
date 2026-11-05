@@ -114,7 +114,7 @@ hotel-core/
                    auth.js, hotels.js, menu.js, orders.js, me.js, reports.js, platform.js
     services/      orderService.js (order creation transaction)
     utils/         http.js, money.js, auth.js
-  database/        schema.sql (fresh install, v2), migrations/001-multi-tenancy.sql, seed.sql
+  backend/database/ schema.sql (fresh install, v2), migrations/001-multi-tenancy.sql, seed.sql
   scripts/         create-platform-admin.js, reset-admin.js, migrate.js, backup.sh
   test/            (see §10)
   public/          UI
@@ -256,7 +256,7 @@ Manual, idempotent where possible, uses `INFORMATION_SCHEMA` checks (this MySQL 
 8. Add the new columns with defaults (`menu_items.is_veg` TRUE, `image_url` NULL, hotel profile columns NULL, `accepting_orders` TRUE); the hotel admin corrects veg flags later.
 9. Print before/after row counts.
 
-### 4.2 Seed (`database/seed.sql`, dev/demo only)
+### 4.2 Seed (`backend/database/seed.sql`, dev/demo only)
 Hotels `udupi-hotel` and `divum-vendor`, each with 8–12 menu items across 3–4 categories, with veg/non-veg flags and placeholder `image_url`s (files in `public/img/`), plus cuisines and cover/logo on each hotel. Platform admin is created by script, never by seed.
 
 ---
@@ -459,7 +459,7 @@ Each step = one branch/PR from `develop`. A step is done only when its **Done wh
 - **Done when:** `git ls-files` contains no `.env*`; app still boots locally.
 
 ### Step 1 — Schema & migration (≈3 h)
-- Write `database/schema.sql` (§4), `migrations/001-multi-tenancy.sql` (§4.1), `scripts/migrate.js`, `seed.sql`.
+- Write `backend/database/schema.sql` (§4), `backend/database/migrations/001-multi-tenancy.sql` (§4.1), `scripts/migrate.js`, `backend/database/seed.sql`.
 - **Done when:** fresh install works; migration on a copy of the old DB preserves all orders/items and links the old admin to hotel 1; composite-FK test passes.
 
 ### Step 2 — Tenant core & auth changes (≈3 h)

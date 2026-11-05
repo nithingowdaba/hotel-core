@@ -9,7 +9,7 @@ const { asyncHandler, single, collection, httpError } = require('../utils/http')
 const {
   positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody,
   httpsUrlRule, booleanRule, priceRule, priceAsDecimal, validate,
-  normalizeMenuItem,
+  normalizeMenuItem, escapeLike,
 } = require('./routeUtils');
 
 const router = Router();
@@ -67,13 +67,13 @@ router.get('/:hotelId/menu-items', [
   ...paginationRules(), validate, resolveHotel, requirePublicActiveHotel,
 ], asyncHandler(async (req, res) => {
   const { page, limit, offset } = pagination(req);
-  const search = req.query.search ? `%${req.query.search}%` : null;
+  const search = req.query.search ? `%${escapeLike(req.query.search)}%` : null;
   const category = req.query.category || null;
   const available = req.query.available === undefined ? null : req.query.available === 'true';
   const veg = req.query.veg === undefined ? null : req.query.veg === 'true';
   const values = [req.hotel.id, search, search, search, category, category, available, available, veg, veg];
   const where = `hotel_id = ?
-    AND (? IS NULL OR name LIKE ? OR description LIKE ?)
+    AND (? IS NULL OR name LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!')
     AND (? IS NULL OR category = ?)
     AND (? IS NULL OR is_available = ?)
     AND (? IS NULL OR is_veg = ?)`;

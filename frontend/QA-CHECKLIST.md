@@ -1,14 +1,14 @@
-# Step 6a browser QA checklist
+# Phase 6b manual QA
 
-Run `npm run dev` from `frontend/`, open the displayed URL, and repeat at 390 px and desktop width.
+Run this checklist against a production build with `DB_NAME=hotel_core_dev`. Never run browser QA against `hotel_core_test`.
 
-- [ ] Home search debounces, cuisine chips filter, cards load more, closed hotels are marked, and card images fall back gracefully.
-- [ ] Hotel menu search, veg filter, category scroll-spy, ADD/quantity stepper, unavailable items, closed hotel banner, and sticky cart bar work.
-- [ ] Add from another hotel; cancel and confirm the replace-cart dialog. Refresh and confirm the cart persists.
-- [ ] Cart payment choices, quantity removal, login-at-checkout return, and one-click order submission work.
-- [ ] Success screen shows the returned order total; open the order detail and verify items/status.
-- [ ] Orders All/Active/Past, pagination, pending cancellation, completed/cancelled status, and reorder path work.
-- [ ] Account profile and logout work; cart survives logout. Admin links lead to the placeholder.
-- [ ] Expire the session and verify redirect to login with cart retained. Disable network and verify the offline toast stays visible.
-- [ ] Complete a keyboard-only pass: focus rings, tabs/chips/steppers, modal focus and Escape handling.
-- [ ] Check browser console for errors, especially CSP violations. Check 360–430 px widths for horizontal scrolling and 44 px controls.
+- [ ] Create and edit a hotel, including the duplicate-slug error.
+- [ ] Add and remove a hotel admin in both modes: link by email and create a new account.
+- [ ] Add, edit, and toggle menu-item availability with both valid and broken image URLs.
+- [ ] Toggle accepting orders and confirm the customer sees the hotel as “Closed”.
+- [ ] Confirm a customer order appears in Live orders within 15 seconds; complete and cancel orders, and confirm the customer sees each status.
+- [ ] Confirm reports match completed orders and exclude cancelled orders.
+- [ ] Suspend and reactivate a hotel.
+- [ ] Check the metrics page.
+- [ ] Confirm an admin of hotel A gets “Not authorized” on hotel B’s `/admin` route.
+- [ ] At 390 px, confirm no horizontal scroll (`document.documentElement.scrollWidth <= window.innerWidth`), no console or CSP errors, and broken images fall back to the placeholder.

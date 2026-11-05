@@ -2,25 +2,27 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const mysql = require('mysql2/promise');
-const { connectionOptions, databaseFromArgs } = require('./db-config');
+const { selectedDatabase, validateDatabaseIdentifier } = require('./db-config');
+
+const SCHEMA_PATH = path.resolve(__dirname, '..', 'database', 'schema.sql');
 
 async function applySchema(connection, database) {
-  const schemaPath = path.resolve(__dirname, '..', 'database', 'schema.sql');
-  const schema = await fs.readFile(schemaPath, 'utf8');
-  const selectedSchema = schema.replace(/`hotel_core`/g, `\`${database}\``);
-  await connection.query(selectedSchema);
+  const target = validateDatabaseIdentifier(database);
+  const [[selected]] = await connection.query('SELECT DATABASE() AS database_name');
+  if (selected?.database_name !== target) {
+    throw new Error(`Schema target mismatch: connection is not using selected database "${target}".`);
+  }
+
+  const schema = await fs.readFile(SCHEMA_PATH, 'utf8');
+  if (/^\s*(?:CREATE\s+DATABASE|USE\s+)/im.test(schema)) {
+    throw new Error('Authoritative schema must not create or switch databases.');
+  }
+  await connection.query(schema);
 }
 
 async function main() {
-  const database = databaseFromArgs();
-  const connection = await mysql.createConnection(connectionOptions({ multipleStatements: true }));
-  try {
-    await applySchema(connection, database);
-    console.log(`Fresh schema applied to database "${database}".`);
-  } finally {
-    await connection.end();
-  }
+  const { initDatabase } = require('./init-db');
+  return initDatabase({ database: selectedDatabase() });
 }
 
 if (require.main === module) {
@@ -30,4 +32,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { applySchema };
+module.exports = { SCHEMA_PATH, applySchema };

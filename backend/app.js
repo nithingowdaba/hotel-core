@@ -62,6 +62,7 @@ app.use(
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/health', setRoutePrefix, healthRouter);
+app.use('/api/health', setRoutePrefix, healthRouter);
 app.use('/api', routes);
 
 // Serve the customer application only after a production frontend build exists.

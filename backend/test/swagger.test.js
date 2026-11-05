@@ -36,6 +36,8 @@ test('Swagger spec documents hotel, menu, platform, order, report, and health ro
   }
   assert.deepEqual(spec.paths['/api/hotels/{hotelId}/menu-items'].post.requestBody.required, true);
   assert.deepEqual(spec.paths['/api/platform/hotels/{hotelId}/admins'].post.requestBody.required, true);
+  assert.ok(spec.paths['/api/platform/hotels'].get.parameters.some((parameter) => parameter.name === 'search' && parameter.in === 'query'));
+  assert.ok(spec.paths['/api/me/orders'].get.parameters.some((parameter) => parameter.name === 'status' && parameter.schema.enum.includes('past')));
   const createOrder = spec.paths['/api/hotels/{hotelId}/orders'].post;
   assert.equal(createOrder.requestBody.content['application/json'].schema.required.includes('items'), true);
   assert.equal(createOrder.security[0].bearerAuth.length, 0);
