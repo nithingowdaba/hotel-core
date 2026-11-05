@@ -1,0 +1,4 @@
+import { it, expect } from 'vitest';
+import fs from 'node:fs';import path from 'node:path';import { fileURLToPath } from 'node:url';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+it('frontend source contains no unsafe HTML, eval, external URLs, or inline script',()=>{const files=[];const walk=(dir)=>fs.readdirSync(dir,{withFileTypes:true}).forEach((x)=>x.isDirectory()?walk(path.join(dir,x.name)):files.push(path.join(dir,x.name)));walk(root);for(const file of files.filter((x)=>!x.endsWith('.test.js')&&!x.endsWith('.test.jsx'))){const text=fs.readFileSync(file,'utf8');expect(text,`${file} unsafe HTML`).not.toMatch(/dangerouslySetInnerHTML|eval\s*\(|new\s+Function\s*\(/);expect(text,`${file} external URL`).not.toMatch(/https?:\/\/(?!www\.w3\.org)/);}const html=fs.readFileSync(path.resolve(root,'../index.html'),'utf8');expect(html).not.toMatch(/<script\b[^>]*>\s*[^<\s]/i);});

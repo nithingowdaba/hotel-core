@@ -4,6 +4,8 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const env = require('./config/env');
 const swaggerSpec = require('./config/swagger');
@@ -25,6 +27,7 @@ app.use(helmet({
       'script-src': ["'self'"],
       'style-src': ["'self'"],
       'img-src': ["'self'", 'https:', 'data:'],
+      'connect-src': ["'self'"],
     },
   },
 }));
@@ -60,6 +63,27 @@ app.use(
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/health', setRoutePrefix, healthRouter);
 app.use('/api', routes);
+
+// Serve the customer application only after a production frontend build exists.
+const frontendDist = path.resolve(__dirname, '../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist, {
+    index: false,
+    setHeaders(res, filePath) {
+      const relative = path.relative(frontendDist, filePath).split(path.sep).join('/');
+      if (relative.startsWith('assets/')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else if (path.basename(filePath) === 'index.html') {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  }));
+  app.get(/^(?!\/api|\/api-docs|\/health).*/, (req, res, next) => {
+    if (req.method !== 'GET') return next();
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
 
 // 404 handler for unmatched routes
 app.use((req, res) => {
