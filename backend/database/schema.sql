@@ -1,9 +1,3 @@
-CREATE DATABASE IF NOT EXISTS `hotel_core`
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_0900_ai_ci;
-
-USE `hotel_core`;
-
 CREATE TABLE users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   full_name VARCHAR(120) NOT NULL,

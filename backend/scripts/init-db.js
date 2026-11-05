@@ -1,60 +1,45 @@
 'use strict';
 
-/**
- * Script for fresh database initialization.
- * Reads and applies database/schema.sql.
- *
- * Usage: npm run db:init  OR  node scripts/init-db.js
- */
-
-const fs = require('node:fs');
-const path = require('node:path');
 const mysql = require('mysql2/promise');
-const env = require('../config/env');
+const { connectionOptions, quoteDatabaseIdentifier, selectedDatabase } = require('./db-config');
+const { applySchema } = require('./db-schema');
 
-async function initDatabase() {
-  const schemaPath = path.resolve(__dirname, '../../database/schema.sql');
-  if (!fs.existsSync(schemaPath)) {
-    console.error(`[db:init] Schema file not found: ${schemaPath}`);
-    process.exit(1);
-  }
+const TABLES = ['users', 'hotels', 'hotel_members', 'menu_items', 'orders', 'order_items'];
 
-  const sql = fs.readFileSync(schemaPath, 'utf8');
-
-  console.log(`[db:init] Connecting to MySQL at ${env.db.socketPath || `${env.db.host}:${env.db.port}`}…`);
-
-  const connectionConfig = {
-    user: env.db.user,
-    password: env.db.password,
-    multipleStatements: true,
-  };
-
-  if (env.db.socketPath) {
-    connectionConfig.socketPath = env.db.socketPath;
-  } else {
-    connectionConfig.host = env.db.host;
-    connectionConfig.port = env.db.port;
-  }
-
-  const connection = await mysql.createConnection(connectionConfig);
-
+async function initDatabase({ database, mysqlClient = mysql, logger = console } = {}) {
+  const target = database || selectedDatabase();
+  const quotedTarget = quoteDatabaseIdentifier(target);
+  const adminConnection = await mysqlClient.createConnection(connectionOptions({ multipleStatements: false }));
   try {
-    console.log('[db:init] Executing schema.sql…');
-    await connection.query(sql);
-
-    const [tables] = await connection.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name`,
-      [env.db.name]
+    await adminConnection.query(
+      `CREATE DATABASE IF NOT EXISTS ${quotedTarget} CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`,
     );
+  } finally {
+    await adminConnection.end();
+  }
 
-    console.log(`[db:init] ✓ Database "${env.db.name}" initialized successfully.`);
-    console.log(`[db:init] Tables created:`, tables.map((t) => t.TABLE_NAME || t.table_name).join(', '));
-  } catch (err) {
-    console.error('[db:init] Failed to initialize database:', err.message);
-    process.exit(1);
+  const connection = await mysqlClient.createConnection(connectionOptions({ database: target, multipleStatements: true }));
+  try {
+    await applySchema(connection, target);
+    const [tables] = await connection.execute(
+      `SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME`,
+    );
+    const actual = tables.map((table) => table.TABLE_NAME || table.table_name);
+    const missing = TABLES.filter((table) => !actual.includes(table));
+    if (missing.length) throw new Error(`Schema initialization did not create required tables: ${missing.join(', ')}.`);
+    logger.log(`[db:init] Fresh schema applied to selected database "${target}".`);
+    logger.log(`[db:init] Tables present: ${actual.join(', ')}`);
+    return { database: target, tables: actual };
   } finally {
     await connection.end();
   }
 }
 
-initDatabase();
+if (require.main === module) {
+  initDatabase().catch((error) => {
+    console.error(`[db:init] ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { initDatabase };

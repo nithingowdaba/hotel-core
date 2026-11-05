@@ -21,7 +21,9 @@ if (process.env.DB_PASSWORD === undefined) {
 }
 
 const { runMigration } = require('../scripts/migrate');
-const { applySchema } = require('../scripts/db-schema');
+const { initDatabase } = require('../scripts/init-db');
+const { SCHEMA_PATH } = require('../scripts/db-schema');
+const { seedDatabase } = require('../scripts/seed-db');
 
 function quoteIdentifier(identifier) {
   if (!/^[A-Za-z0-9_]+$/.test(identifier)) throw new Error('Unsafe test database identifier.');
@@ -133,8 +135,40 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
   const connection = await mysql.createConnection(connectionOptions());
   try {
     await resetDatabase(connection);
-    const schema = await fs.readFile(path.resolve(__dirname, '..', 'database', 'schema.sql'), 'utf8');
-    await applySchema(connection, databaseName);
+    const schemaPath = path.resolve(__dirname, '..', 'database', 'schema.sql');
+    const schema = await fs.readFile(schemaPath, 'utf8');
+    assert.equal(SCHEMA_PATH, schemaPath, 'installation must use the schema read by this test');
+    assert.doesNotMatch(schema, /^\s*(?:CREATE\s+DATABASE|USE\s+)/im, 'schema SQL must not create or switch databases');
+    const initialized = await initDatabase({ database: databaseName, logger: { log() {} } });
+    assert.equal(initialized.database, databaseName);
+    const [[selectedDatabase]] = await connection.query('SELECT DATABASE() AS database_name');
+    assert.equal(selectedDatabase.database_name, databaseName);
+
+    await t.test('demo seed is idempotent and preserves unrelated existing records', async () => {
+      await seedDatabase({ database: databaseName, logger: { log() {} } });
+      const [[hotel]] = await connection.execute('SELECT id FROM hotels WHERE slug = ?', ['udupi-hotel']);
+      const [userInsert] = await connection.execute(
+        `INSERT INTO users (full_name, email, phone, password_hash, role)
+         VALUES (?, ?, ?, ?, 'CUSTOMER')`,
+        ['Safety Sentinel', 'safety-sentinel@example.test', '+910000000099', 'placeholder-hash'],
+      );
+      const [orderInsert] = await connection.execute(
+        `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount)
+         VALUES (?, ?, ?, ?, 'cash', 1.00)`,
+        [hotel.id, userInsert.insertId, 'Safety Sentinel', '+910000000099'],
+      );
+      const [[before]] = await connection.execute('SELECT COUNT(*) AS total FROM menu_items');
+
+      await seedDatabase({ database: databaseName, logger: { log() {} } });
+
+      const [[sentinelUser]] = await connection.execute('SELECT id FROM users WHERE id = ?', [userInsert.insertId]);
+      const [[sentinelOrder]] = await connection.execute('SELECT id FROM orders WHERE id = ?', [orderInsert.insertId]);
+      const [[after]] = await connection.execute('SELECT COUNT(*) AS total FROM menu_items');
+      assert.equal(sentinelUser.id, userInsert.insertId);
+      assert.equal(sentinelOrder.id, orderInsert.insertId);
+      assert.equal(Number(after.total), Number(before.total));
+      assert.equal(await fs.readFile(path.resolve(__dirname, '..', 'database', 'seed.sql'), 'utf8'), await fs.readFile(require('../scripts/seed-db').SEED_PATH, 'utf8'));
+    });
 
     await t.test('fresh install creates the six required InnoDB tables and composite keys', async () => {
       const [rows] = await connection.execute(
