@@ -40,6 +40,10 @@ function generatedSlug(name) {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
 }
 
+function escapeLike(value) {
+  return value.replace(/[!%_]/g, (character) => `!${character}`);
+}
+
 async function ensureHotel(hotelId) {
   const [rows] = await dbQuery('SELECT id FROM hotels WHERE id = ? LIMIT 1', [hotelId]);
   if (!rows.length) throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
@@ -112,21 +116,31 @@ router.post('/hotels', [
  *       - in: query
  *         name: limit
  *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *       - in: query
+ *         name: search
+ *         schema: { type: string, maxLength: 120 }
  *     responses:
  *       200: { description: Paginated hotels across all statuses }
  *       403: { description: Platform administrator access required }
  */
 router.get('/hotels', [
-  rejectUnknownQuery(['page', 'limit']), ...paginationRules(), validate,
+  rejectUnknownQuery(['page', 'limit', 'search']), ...paginationRules(),
+  query('search').optional().isString().trim().isLength({ max: 120 }), validate,
 ], asyncHandler(async (req, res) => {
   const { page, limit, offset } = pagination(req);
-  const [countRows] = await dbQuery('SELECT COUNT(*) AS total FROM hotels');
+  const search = String(req.query.search ?? '').trim();
+  const term = `%${escapeLike(search)}%`;
+  const where = `(? = '' OR h.name LIKE ? ESCAPE '!' OR h.slug LIKE ? ESCAPE '!')`;
+  const [countRows] = await dbQuery(
+    `SELECT COUNT(*) AS total FROM hotels h WHERE ${where}`, [search, term, term],
+  );
   const [rows] = await dbQuery(
     `SELECT h.id, h.name, h.slug, h.description, h.cuisines, h.address, h.phone,
             h.logo_url, h.cover_url, h.accepting_orders, h.status, h.created_at,
             COUNT(hm.user_id) AS admin_count
      FROM hotels h LEFT JOIN hotel_members hm ON hm.hotel_id = h.id
-     GROUP BY h.id ORDER BY h.id LIMIT ? OFFSET ?`, [limit, offset],
+     WHERE ${where}
+     GROUP BY h.id ORDER BY h.id LIMIT ? OFFSET ?`, [search, term, term, limit, offset],
   );
   const total = Number(countRows[0].total);
   collection(res, rows.map(normalizeHotel), { page, limit, total, totalPages: Math.ceil(total / limit) });

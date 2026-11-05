@@ -331,6 +331,64 @@ test('non-platform users cannot access platform administration', async () => {
   assert.equal(response.status, 403);
 });
 
+test('platform hotel search spans all records and keeps filtered pagination totals', async () => {
+  const [[before]] = await connection.query('SELECT COUNT(*) AS total FROM hotels');
+  for (let index = 0; index < 25; index += 1) {
+    await connection.execute('INSERT INTO hotels (name, slug, status) VALUES (?, ?, ?)', [
+      `Search Batch ${String(index).padStart(2, '0')}`, `search-batch-${index}`, 'active',
+    ]);
+  }
+  for (const [name, slug] of [
+    ['Literal 100% Cafe', 'literal-percent-cafe'],
+    ['Under_score Cafe', 'under-score-cafe'],
+    ['Bang! Cafe', 'bang-cafe'],
+  ]) {
+    await connection.execute('INSERT INTO hotels (name, slug, status) VALUES (?, ?, ?)', [name, slug, 'active']);
+  }
+
+  const beyondFirstPage = await request('/api/platform/hotels?search=Search%20Batch%2024&limit=10&page=1', { token: tokens.platform });
+  assert.equal(beyondFirstPage.status, 200);
+  const lastMatch = await beyondFirstPage.json();
+  assert.equal(lastMatch.meta.total, 1);
+  assert.equal(lastMatch.data[0].slug, 'search-batch-24');
+
+  for (const [search, expectedSlug] of [
+    ['%25', 'literal-percent-cafe'],
+    ['_', 'under-score-cafe'],
+    ['%21', 'bang-cafe'],
+  ]) {
+    const literalMatch = await request(`/api/platform/hotels?search=${search}`, { token: tokens.platform });
+    const literal = await literalMatch.json();
+    assert.equal(literal.meta.total, 1);
+    assert.equal(literal.data[0].slug, expectedSlug);
+  }
+
+  const secondPage = await request('/api/platform/hotels?search=Search%20Batch&limit=10&page=2', { token: tokens.platform });
+  const paged = await secondPage.json();
+  assert.equal(paged.meta.total, 25);
+  assert.equal(paged.meta.totalPages, 3);
+  assert.equal(paged.data.length, 10);
+
+  const noMatches = await request('/api/platform/hotels?search=not-a-real-hotel', { token: tokens.platform });
+  const empty = await noMatches.json();
+  assert.equal(empty.meta.total, 0);
+  assert.deepEqual(empty.data, []);
+
+  const unfiltered = await request('/api/platform/hotels?search=&limit=10&page=2', { token: tokens.platform });
+  const normalPage = await unfiltered.json();
+  assert.equal(normalPage.meta.total, Number(before.total) + 28);
+  assert.equal(normalPage.meta.page, 2);
+  assert.equal(normalPage.data.length, 10);
+
+  const whitespace = await request('/api/platform/hotels?search=%20%20&limit=10&page=2', { token: tokens.platform });
+  const whitespacePage = await whitespace.json();
+  assert.equal(whitespacePage.meta.total, normalPage.meta.total);
+  assert.deepEqual(whitespacePage.data.map((hotel) => hotel.id), normalPage.data.map((hotel) => hotel.id));
+
+  const invalid = await request('/api/platform/hotels?search[]=invalid', { token: tokens.platform });
+  assert.equal(invalid.status, 400);
+});
+
 test('orders, customer history, hotel transitions, reports, and metrics enforce scope', async () => {
   const created = await request(`/api/hotels/${ids.hotelA}/orders`, {
     method: 'POST', token: tokens.customer,
@@ -347,6 +405,45 @@ test('orders, customer history, hotel transitions, reports, and metrics enforce 
   const own = await request('/api/me/orders', { token: tokens.customer });
   assert.equal(own.status, 200);
   assert.ok((await own.json()).data.some((item) => item.id === order.id));
+
+  await connection.execute(
+    `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount)
+     VALUES (?, ?, 'Customer C', '9000000000', 'cash', 25.00)`, [ids.hotelA, ids.customer],
+  );
+  await connection.execute(
+    `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount)
+     VALUES (?, ?, 'Admin A', '9000000001', 'cash', 25.00)`, [ids.hotelA, ids.adminA],
+  );
+  const cancelledOrder = await connection.execute(
+    `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount, status, cancelled_at)
+     VALUES (?, ?, 'Customer C', '9000000000', 'cash', 25.00, 'pending', CURRENT_TIMESTAMP)`, [ids.hotelA, ids.customer],
+  );
+  const completedHistoryOrder = await connection.execute(
+    `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount, status)
+     VALUES (?, ?, 'Customer C', '9000000000', 'cash', 25.00, 'completed')`, [ids.hotelA, ids.customer],
+  );
+  const pendingHistory = await request('/api/me/orders?status=pending&limit=1&page=2', { token: tokens.customer });
+  const pendingPage = await pendingHistory.json();
+  assert.equal(pendingPage.meta.total, 2);
+  assert.equal(pendingPage.meta.page, 2);
+  assert.equal(pendingPage.data.length, 1);
+  assert.equal(pendingPage.data[0].status, 'pending');
+  const completedHistory = await request('/api/me/orders?status=completed', { token: tokens.customer });
+  assert.deepEqual((await completedHistory.json()).data.map((item) => item.id), [completedHistoryOrder[0].insertId]);
+  const cancelledHistory = await request('/api/me/orders?status=cancelled', { token: tokens.customer });
+  assert.deepEqual((await cancelledHistory.json()).data.map((item) => item.id), [cancelledOrder[0].insertId]);
+  const pastHistory = await request('/api/me/orders?status=past', { token: tokens.customer });
+  assert.deepEqual((await pastHistory.json()).data.map((item) => item.id).sort((a, b) => b - a), [completedHistoryOrder[0].insertId, cancelledOrder[0].insertId].sort((a, b) => b - a));
+  const unfilteredHistory = await request('/api/me/orders?limit=1&page=2', { token: tokens.customer });
+  assert.equal((await unfilteredHistory.json()).meta.total, 4);
+  const [[allUsersPending]] = await connection.query(
+    `SELECT COUNT(*) AS total FROM orders WHERE status = 'pending' AND cancelled_at IS NULL`,
+  );
+  assert.equal(Number(allUsersPending.total), 3);
+  const outOfRangePending = await request('/api/me/orders?status=pending&limit=1&page=3', { token: tokens.customer });
+  const outOfRange = await outOfRangePending.json();
+  assert.equal(outOfRange.data.length, 0);
+  assert.equal(outOfRange.meta.total, 2);
   const hidden = await request(`/api/me/orders/${order.id}`, { token: tokens.adminA });
   assert.equal(hidden.status, 404);
 
