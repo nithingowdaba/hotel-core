@@ -42,7 +42,7 @@ export default function PlatformHotelDetail() {
   React.useEffect(() => { if (hotel) setForm(getFields(hotel)); }, [hotel]);
   const adminParams = { page, limit: 20 };
   const adminsQuery = useQuery({ queryKey: adminKeys.hotelAdmins(hotelId, adminParams), queryFn: () => adminApi.admins(hotelId, adminParams), enabled: Boolean(hotel), staleTime: 20000, retry: (n, e) => e.status >= 400 && e.status < 500 ? false : n < 1 });
-  React.useEffect(() => { if (!adminsQuery.data) return; const list = rowsOf(adminsQuery.data); setAdmins((old) => page === 1 ? list : [...old, ...list]); }, [adminsQuery.dataUpdatedAt, page]);
+  React.useEffect(() => { if (!adminsQuery.data) return; const list = rowsOf(adminsQuery.data); setAdmins((old) => page === 1 ? list : [...old, ...list]); }, [adminsQuery.data, page]);
   const save = useMutation({
     mutationFn: (body) => adminApi.updatePlatformHotel(hotelId, body),
     onSuccess: (updated) => { setForm(getFields(updated)); setErrors({}); setFormError(''); client.invalidateQueries({ queryKey: ['platform', 'hotel-detail', hotelId] }); client.invalidateQueries({ queryKey: ['platform', 'hotels'] }); notify('Hotel profile saved.'); },

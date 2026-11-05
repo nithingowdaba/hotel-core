@@ -24,7 +24,7 @@ export default function PlatformHotels() {
   const [formError, setFormError] = React.useState('');
   const params = { page, limit: 20 };
   const query = useQuery({ queryKey: adminKeys.hotels(params), queryFn: () => adminApi.hotels(params), staleTime: 30000, retry: (n, e) => e.status >= 400 && e.status < 500 ? false : n < 1 });
-  React.useEffect(() => { if (!query.data) return; const pageRows = unpack(query.data); setRows((old) => page === 1 ? pageRows : [...old, ...pageRows]); }, [query.dataUpdatedAt, page]);
+  React.useEffect(() => { if (!query.data) return; const pageRows = unpack(query.data); setRows((old) => page === 1 ? pageRows : [...old, ...pageRows]); }, [query.data, page]);
   const filtered = rows.filter((hotel) => `${hotel.name} ${hotel.slug} ${hotel.cuisines || ''}`.toLowerCase().includes(queryText.toLowerCase()));
   const create = useMutation({
     mutationFn: adminApi.createHotel,

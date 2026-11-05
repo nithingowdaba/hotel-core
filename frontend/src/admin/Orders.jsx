@@ -33,7 +33,7 @@ export default function AdminOrders() {
     retry: (count, error) => error.status >= 400 && error.status < 500 ? false : count < 1,
   });
   const rows = unwrapRows(query.data);
-  React.useEffect(() => { if (!query.data) return; setLoadedRows((old) => page === 1 ? rows : [...old, ...rows]); }, [query.dataUpdatedAt, page]);
+  React.useEffect(() => { if (!query.data) return; setLoadedRows((old) => page === 1 ? rows : [...old, ...rows]); }, [query.data, page, rows]);
   const totalPages = query.data?.meta?.totalPages || 1;
   React.useEffect(() => {
     if (!query.data) return;
@@ -42,7 +42,7 @@ export default function AdminOrders() {
     seen.current = ids;
     if (status === 'pending') document.title = `(${query.data?.meta?.total ?? rows.length}) Orders · hotel-core`;
     else document.title = `${status[0].toUpperCase()}${status.slice(1)} orders · hotel-core`;
-  }, [query.dataUpdatedAt, status]);
+  }, [query.data, rows, status]);
   const refresh = () => query.refetch().then(() => setNewIds([]));
 
   const complete = useMutation({

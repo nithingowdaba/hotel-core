@@ -33,7 +33,8 @@ export function Sheet({ title, onClose, children }) {
 }
 
 export function Field({ label, name, error, className = '', as: Element = 'input', ...props }) {
-  const id = props.id || `admin-${name}`;
+  const reactId = React.useId().replace(/:/g, '');
+  const id = props.id || `admin-${name}-${reactId}`;
   return <label className={`field-label admin-field ${className}`} htmlFor={id}>{label}<Element {...props} id={id} name={name} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}/>{error && <small className="form-error" id={`${id}-error`}>{error}</small>}</label>;
 }
 
