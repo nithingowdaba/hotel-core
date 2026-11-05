@@ -8,6 +8,7 @@ const dotenv = require('dotenv');
 const mysql = require('mysql2/promise');
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+process.env.DB_NAME = 'hotel_core_test';
 
 const databaseName = process.env.DB_NAME || '';
 if (!/_test$/.test(databaseName)) {

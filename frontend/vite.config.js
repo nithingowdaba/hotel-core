@@ -13,6 +13,6 @@ const backendOrigin = `http://localhost:${backendPort}`;
 export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': backendOrigin, '/api-docs': backendOrigin, '/health': backendOrigin } },
-  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false },
+  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, manifest: true },
   test: { environment: 'jsdom', setupFiles: './src/test/setup.js' },
 });

@@ -9,7 +9,7 @@ const { snapshot: metricsSnapshot } = require('../middleware/metrics');
 const { asyncHandler, single, collection, httpError } = require('../utils/http');
 const {
   positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody,
-  httpsUrlRule, requirePlatformAdmin, normalizeHotel, validate,
+  httpsUrlRule, requirePlatformAdmin, normalizeHotel, escapeLike, validate,
 } = require('./routeUtils');
 
 const router = Router();
@@ -38,10 +38,6 @@ const slugRule = (field, optional = true) => {
 
 function generatedSlug(name) {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
-}
-
-function escapeLike(value) {
-  return value.replace(/[!%_]/g, (character) => `!${character}`);
 }
 
 async function ensureHotel(hotelId) {
@@ -264,6 +260,10 @@ router.get('/hotels/:hotelId/admins', [
  *                 properties:
  *                   user_id: { type: integer, minimum: 1 }
  *               - type: object
+ *                 required: [email]
+ *                 properties:
+ *                   email: { type: string, format: email, maxLength: 255, description: Case-insensitive email of an existing active customer }
+ *               - type: object
  *                 required: [full_name, email, phone, password]
  *                 properties:
  *                   full_name: { type: string, minLength: 1, maxLength: 120 }
@@ -271,9 +271,9 @@ router.get('/hotels/:hotelId/admins', [
  *                   phone: { type: string, minLength: 1, maxLength: 20 }
  *                   password: { type: string, minLength: 8, maxLength: 72 }
  *     responses:
- *       201: { description: Administrator linked to hotel }
+ *       201: { description: Existing eligible customer linked or new customer created and linked }
  *       400: { description: Invalid or mixed administrator modes }
- *       404: { description: Hotel or user not found }
+ *       404: { description: Hotel not found or generic USER_NOT_FOUND for an ineligible or unknown link target }
  *       409: { description: User is already an administrator or email is in use }
  */
 router.post('/hotels/:hotelId/admins', [
@@ -281,10 +281,10 @@ router.post('/hotels/:hotelId/admins', [
   body().custom((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Body must be a JSON object.');
     const keys = Object.keys(value);
-    const linkMode = keys.length === 1 && keys[0] === 'user_id';
+    const linkMode = keys.length === 1 && ['user_id', 'email'].includes(keys[0]);
     const createFields = ['full_name', 'email', 'phone', 'password'];
     const createMode = keys.length === createFields.length && createFields.every((key) => keys.includes(key));
-    if (!linkMode && !createMode) throw new Error('Provide user_id or full_name, email, phone, and password.');
+    if (!linkMode && !createMode) throw new Error('Provide exactly one link selector (user_id or email) or all creation fields.');
     return true;
   }),
   body('user_id').if((value, { req }) => Object.hasOwn(req.body, 'user_id'))
@@ -299,12 +299,18 @@ router.post('/hotels/:hotelId/admins', [
     .isString().isLength({ min: 8, max: 72 }), validate,
 ], asyncHandler(async (req, res) => {
   await ensureHotel(req.params.hotelId);
-  let userId = req.body.user_id;
-  if (userId !== undefined) {
-    const [users] = await dbQuery(
-      `SELECT id FROM users WHERE id = ? AND is_active = TRUE LIMIT 1`, [userId],
-    );
-    if (!users.length) throw httpError(404, 'USER_NOT_FOUND', 'Active user not found.');
+  let userId;
+  const linkMode = req.body.user_id !== undefined || req.body.full_name === undefined;
+  if (linkMode) {
+    const [users] = req.body.user_id !== undefined
+      ? await dbQuery(
+        `SELECT id FROM users WHERE id = ? AND role = 'CUSTOMER' AND is_active = TRUE LIMIT 1`, [req.body.user_id],
+      )
+      : await dbQuery(
+        `SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND role = 'CUSTOMER' AND is_active = TRUE LIMIT 1`, [req.body.email],
+      );
+    if (!users.length) throw httpError(404, 'USER_NOT_FOUND', 'Eligible user not found.');
+    userId = users[0].id;
     try {
       await dbQuery('INSERT INTO hotel_members (user_id, hotel_id) VALUES (?, ?)', [userId, req.params.hotelId]);
     } catch (err) {

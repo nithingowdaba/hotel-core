@@ -58,7 +58,7 @@ Rules:
 - **UI: consumer-grade, Swiggy/Blinkit-style app (§14):** hotel discovery → hotel menu → cart → checkout → orders; hotel admin panel; platform admin panel
 
 ### 1.3 Out of scope (do NOT build)
-Hotel self-signup/approval flow, payment gateway, per-date pricing, richer order statuses (confirmed/preparing/ready/out-for-delivery), delivery/rider tracking, maps/geolocation, ratings & reviews, coupons/offers, password reset, refresh tokens, per-hotel subdomains, per-hotel databases (see §1.0), multi-hotel carts, cross-hotel dish search, notifications, Redis/queues, microservices, full monitoring dashboard, a JS build step or framework.
+Hotel self-signup/approval flow, payment gateway, per-date pricing, richer order statuses (confirmed/preparing/ready/out-for-delivery), delivery/rider tracking, maps/geolocation, ratings & reviews, coupons/offers, password reset, refresh tokens, per-hotel subdomains, per-hotel databases (see §1.0), multi-hotel carts, cross-hotel dish search, notifications, Redis/queues, microservices, full monitoring dashboard.
 
 ---
 
@@ -71,7 +71,7 @@ Hotel self-signup/approval flow, payment gateway, per-date pricing, richer order
 - Docs: `swagger-jsdoc` + `swagger-ui-express` (keep `/api-docs`)
 - Tests: built-in `node --test`
 - New small dependencies allowed: `helmet`, `compression` (only if nginx gzip is not used), `pino` (or plain JSON `console.log`). No others without a written reason.
-- Frontend: static files in `public/`, **vanilla JS (ES modules) + CSS variables, no build step, no framework**, served by Express/nginx. Full UI spec in §14; AI UI tools may be used to generate it, but must follow §14.
+- Frontend: **React 18 + Vite**, source in `frontend/src/`, production build in `frontend/dist/`; Express serves the browser-history SPA fallback and API.
 
 ### 2.1 Conventions to keep (existing, do not change)
 - Success: `{ "success": true, "data": ... }`; lists add `meta: { page, limit, total, totalPages }`.
@@ -114,10 +114,10 @@ hotel-core/
                    auth.js, hotels.js, menu.js, orders.js, me.js, reports.js, platform.js
     services/      orderService.js (order creation transaction)
     utils/         http.js, money.js, auth.js
-  backend/database/ schema.sql (fresh install, v2), migrations/001-multi-tenancy.sql, seed.sql
+  backend/database/schema.sql (fresh install, v2), backend/database/migrations/001-multi-tenancy.sql, backend/database/seed.sql
   scripts/         create-platform-admin.js, reset-admin.js, migrate.js, backup.sh
   test/            (see §10)
-  public/          UI
+  frontend/        React 18 + Vite UI source and production build
   docker/          Dockerfile, docker-compose.yml, nginx.conf
   SPEC.md          (this file)
 ```
@@ -244,7 +244,7 @@ CREATE TABLE order_items (
 ) ENGINE=InnoDB;
 ```
 
-### 4.1 Migration of the existing database (`database/migrations/001-multi-tenancy.sql`)
+### 4.1 Migration of the existing database (`backend/database/migrations/001-multi-tenancy.sql`)
 Manual, idempotent where possible, uses `INFORMATION_SCHEMA` checks (this MySQL version rejects `ADD COLUMN IF NOT EXISTS`). **Back up first.** Never run automatically at server start; run via `npm run migrate`.
 1. Insert default hotel: `Udupi Hotel`, slug `udupi-hotel`, status `active` → id 1.
 2. Add `hotel_id` (nullable) to `menu_items`, `orders`; `UPDATE ... SET hotel_id = 1`; then `MODIFY ... NOT NULL`.
@@ -305,7 +305,7 @@ Image/logo/cover URLs must be `https://` (validated, max 500). There is no delet
 ### 5.5 Orders
 | Method & path | Access | Notes |
 |---|---|---|
-| `POST /hotels/:hotelId/orders` | Auth (customer or anyone) | `{payment_method, items:[{menu_item_id, quantity 1–999}]}`. Hotel must be `active` and `accepting_orders` (else 409 `HOTEL_CLOSED`). All items must belong to `:hotelId` and be available. Server computes price. Name/phone come from DB user. 201 returns order + items |
+| `POST /hotels/:hotelId/orders` | Auth (active customer) | `{payment_method, items:[{menu_item_id, quantity 1–999}]}`. Hotel must be `active` and `accepting_orders` (else 409 `HOTEL_CLOSED`). All items must belong to `:hotelId` and be available. Server computes price. Name/phone come from DB user. 201 returns order + items |
 | `GET /me/orders` | Auth | Own orders across all hotels, newest first. Query `status` (`pending|completed|cancelled`), pagination. Include `hotel_id` and hotel `name` via JOIN |
 | `GET /me/orders/:orderId` | Auth | Own order with items, else 404 |
 | `PATCH /me/orders/:orderId/cancel` | Auth | Own, active pending only. Else 409 `CANCELLATION_NOT_ALLOWED` |
@@ -328,7 +328,7 @@ Only `status='completed' AND cancelled_at IS NULL`. Date filters use half-open r
 | `GET /platform/hotels` | All statuses, pagination |
 | `PATCH /platform/hotels/:hotelId` | name, description, cuisines, address, phone, logo_url, cover_url, `status` (`active|suspended`) |
 | `GET /platform/hotels/:hotelId/admins` | List admins of hotel |
-| `POST /platform/hotels/:hotelId/admins` | Exactly one mode: `{user_id}` (link existing user) **or** `{full_name, email, phone, password}` (create user + link, in one transaction). Idempotent link (409 if already admin) |
+| `POST /platform/hotels/:hotelId/admins` | Exactly one mode: `{user_id}` or `{email}` (link an existing active `CUSTOMER`; email lookup is case-insensitive; platform admins and inactive users are ineligible; neither/both selectors are rejected; ineligible or unknown email returns generic 404 `USER_NOT_FOUND`) **or** `{full_name, email, phone, password}` (create user + link, in one transaction). Duplicate link returns 409 |
 | `DELETE /platform/hotels/:hotelId/admins/:userId` | Remove link only; the user account stays |
 | `GET /platform/metrics` | In-memory request metrics (§8) |
 
@@ -550,38 +550,38 @@ Each step = one branch/PR from `develop`. A step is done only when its **Done wh
 App shell (top bar + bottom tab bar) · Search field · Chip / chip-row (horizontal scroll) · Hotel card · Menu item row · Veg/non-veg marker (square outline with dot) · **ADD button → quantity stepper (− 1 +)** · Sticky cart bar · Bottom sheet / modal · Cart line · Bill summary · Status chip (Pending = amber, Completed = green, Cancelled = red) · Toast · Skeleton loader · Empty state · Error state with Retry · Toggle switch · Form fields with inline validation · Data table (admin) · Tabs.
 
 ### 14.4 Customer screens
-Routing: hash router (`#/`, `#/hotel/:id`, `#/cart`, `#/orders`, `#/orders/:id`, `#/account`, `#/login`). Bottom tab bar on mobile: **Home · Search · Orders · Account** (+ cart reachable via the sticky bar and a header cart icon with badge). On desktop the tab bar becomes a top navigation.
+Routing: browser-history URLs (`/`, `/hotel/:id`, `/cart`, `/orders`, `/orders/:id`, `/account`, `/login`). Express serves the SPA fallback for direct navigation and refresh. Bottom tab bar on mobile: **Home · Search · Orders · Account** (+ cart reachable via the sticky bar and a header cart icon with badge). On desktop the tab bar becomes a top navigation.
 
-1. **Home / hotel discovery (`#/`)**
+1. **Home / hotel discovery (`/`)**
    - Sticky header: brand, search field ("Search hotels or cuisines").
    - Cuisine chips (derived from `GET /hotels` `cuisines`), horizontal scroll, tap to filter (client-side).
    - "Hotels for you" grid: **Hotel card** = cover image (16:9, lazy, placeholder on error), logo badge, name, cuisines, address line; **"Closed"** greyed overlay when `accepting_orders=false`.
    - Pagination via "Load more" (or infinite scroll).
-2. **Hotel page (`#/hotel/:id`)**
+2. **Hotel page (`/hotel/:id`)**
    - Header: cover image, name, cuisines, address, open/closed pill.
    - Sticky row: in-menu search, **Veg only** toggle.
    - Sticky category chips with scroll-spy (tapping scrolls to the category; active chip follows scroll).
    - Menu rows: left = veg marker, name, price, 2-line description; right = 96×96 rounded image with the **ADD** button overlapping its bottom edge. After adding, the button becomes the − qty + stepper. Unavailable items: greyed, "Sold out", no ADD button.
    - Data from `GET /hotels/:hotelId/menu` (one request); filtering is client-side.
    - **Sticky cart bar** (bottom, above tab bar): "N items · ₹total — View cart ›".
-3. **Cart (`#/cart`)**: hotel name header; line items with steppers; item total (no taxes/fees in v1); payment method selector (Cash / UPI / Card — recorded only, no gateway; say "Pay at counter/on delivery" style helper text); sticky **Place order · ₹total** button. If not logged in → `#/login?next=cart`. Closed hotel → button disabled with explanation. Server price/availability errors (`ITEM_UNAVAILABLE`, `INVALID_MENU_ITEM`) shown inline per item with a "Remove" action.
+3. **Cart (`/cart`)**: hotel name header; line items with steppers; item total (no taxes/fees in v1); payment method selector (Cash / UPI / Card — recorded only, no gateway; say "Pay at counter/on delivery" style helper text); sticky **Place order · ₹total** button. If not logged in → `/login?next=/cart`. Closed hotel → button disabled with explanation. Server price/availability errors (`ITEM_UNAVAILABLE`, `INVALID_MENU_ITEM`) shown inline per item with a "Remove" action.
 4. **Order placed**: full-screen success (animated check), order number, items summary, buttons **View order** and **Back to home**. Cart cleared.
-5. **Orders (`#/orders`)**: cards newest first from `/me/orders`: hotel logo+name, items summary, total, date/time (IST), status chip. Filters: All / Active / Past. Tap → detail (`#/orders/:id`) with item lines and **Cancel order** (only when pending) and **Reorder** (re-adds still-available items from the same hotel, then opens the cart).
-6. **Auth (`#/login`, register tab)**: mobile full-screen form, inline validation, show/hide password, clear error messages; returns to `next` route. Session expiry (401) → login screen with the cart intact.
-7. **Account (`#/account`)**: name, phone, email, logout. Hotel admins see "Manage <hotel>" shortcuts; platform admin sees "Platform console".
+5. **Orders (`/orders`)**: cards newest first from `/me/orders`: hotel logo+name, items summary, total, date/time (IST), status chip. Filters: All / Active / Past. Tap → detail (`/orders/:id`) with item lines and **Cancel order** (only when pending) and **Reorder** (re-adds still-available items from the same hotel, then opens the cart).
+6. **Auth (`/login`, register tab)**: mobile full-screen form, inline validation, show/hide password, clear error messages; returns to `next` route. Session expiry (401) → login screen with the cart intact.
+7. **Account (`/account`)**: name, phone, email, logout. Hotel admins see "Manage <hotel>" shortcuts; platform admin sees "Platform console".
 
 **Client state**: cart in `localStorage` (`{hotelId, items:[{menu_item_id, name, price, qty}]}`; contains no secrets; prices are display-only, the server recomputes); JWT in `sessionStorage` (cleared on tab close; 1 h expiry). Strict CSP, no inline event handlers, all user-provided text rendered with `textContent` (no `innerHTML` with API data).
 
-### 14.5 Hotel admin panel (`#/admin/:hotelId/...`)
+### 14.5 Hotel admin panel (`/admin/:hotelId/...`)
 Layout: left sidebar on desktop, top tabs on mobile. Hotel switcher in the header for users linked to several hotels.
 - **Live orders:** pending orders first, auto-refresh every 15 s (plain polling), each card shows order #, time, customer name/phone, items, total, payment method; buttons **Mark completed** and **Cancel**. Tabs: Pending / Completed / Cancelled; date filter.
 - **Menu manager:** grouped by category; each row has image, name, price, veg marker, **availability toggle**; **Add item** and **Edit** open a side sheet/modal (name, category, price, veg, description, image URL with live preview). Search + category filter.
 - **Reports:** date picker → today's sales card (order count, total); top-selling items list with simple CSS bars (no chart library).
 - **Settings:** accepting-orders toggle (Open/Closed), description, cuisines, address, phone, logo/cover URLs with preview.
 
-### 14.6 Platform admin panel (`#/platform/...`)
+### 14.6 Platform admin panel (`/platform/...`)
 - **Hotels:** table (name, slug, status chip, admins count, created), search, **Create hotel** modal (name, cuisines, address, phone), Suspend/Activate action with confirmation.
-- **Hotel detail:** admins list; **Add admin** (link existing user by id/email **or** create new), remove admin with confirmation.
+- **Hotel detail:** admins list; **Add admin** (link an existing active customer by user ID or case-insensitive email, **or** create new), remove admin with confirmation.
 - **Metrics:** table from `/platform/metrics` (route, count, errors, p50/p95/max), refresh button.
 
 ### 14.7 States & feedback
@@ -591,20 +591,12 @@ Layout: left sidebar on desktop, top tabs on mobile. Hotel switcher in the heade
 - **Success/errors from actions:** toasts (3 s), form errors inline.
 - **Images:** `loading="lazy"`, explicit `width`/`height` (no layout shift), inline SVG placeholder on `onerror`.
 
-### 14.8 Frontend code layout (`public/`)
-```
-public/
-  index.html                 (app shell, <script type="module" src="js/app.js">)
-  css/   tokens.css, base.css, components.css, screens.css
-  js/    app.js, router.js, api.js (fetch wrapper, error handling, JWT), store.js (cart + session),
-         format.js (₹, dates in IST), dom.js (tiny safe element helper)
-         components/*.js
-         views/  home.js, hotel.js, cart.js, orders.js, order-detail.js, login.js, account.js,
-                 admin/ (orders.js, menu.js, reports.js, settings.js),
-                 platform/ (hotels.js, hotel-detail.js, metrics.js)
-  img/   placeholders (hotel, dish), favicon
-```
-No bundler, no framework, no CDN dependencies required at runtime. Initial JS ≤ ~150 KB uncompressed.
+### 14.8 Frontend architecture and bundle budget
+The application source lives in `frontend/src/`, with customer routes under `pages/`, administrative routes under `admin/`, and shared components, API clients, and state under their respective directories. Vite produces the static production application in `frontend/dist/`.
+
+The accepted frontend architecture is React 18 with Vite. No CDN dependencies are required at runtime. The initial entry JavaScript has a gzip budget of 200 KiB (204,800 bytes) and a secondary raw-size sanity cap of 400 KiB (409,600 bytes). This applies to the entrypoint and its transitive **static JavaScript imports** required at startup; dynamically imported route and feature chunks are excluded until their routes or features are visited. The limits apply to the initial payload, not all generated JavaScript combined.
+
+`frontend/scripts/check-size.js` reads Vite's production `.vite/manifest.json`, follows the entrypoint's transitive `imports` (not `dynamicImports`), and reports raw and gzip bytes for every generated JavaScript chunk. It sums the unique initial JavaScript chunks' raw and gzip sizes, enforces the aggregate 200 KiB gzip budget and 400 KiB raw cap, and keeps a 200 KiB gzip safety check for each generated chunk.
 
 ### 14.9 UI acceptance checklist
 - [ ] Usable at 360–430 px width; no horizontal scroll; tap targets ≥ 44 px.

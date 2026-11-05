@@ -1,17 +1,17 @@
 import React from 'react';
 import { createBrowserRouter, Link, Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 import Shell from './components/Shell.jsx';
-import Home from './pages/Home.jsx';
-import Hotel from './pages/Hotel.jsx';
-import Cart from './pages/Cart.jsx';
-import Orders from './pages/Orders.jsx';
-import OrderDetail from './pages/OrderDetail.jsx';
-import Account from './pages/Account.jsx';
-import Auth from './pages/Auth.jsx';
-import OrderPlaced from './pages/OrderPlaced.jsx';
 import NotFound from './pages/NotFound.jsx';
 import { useSession } from './store/session.js';
 import { useMe } from './api/hooks.js';
+const Home=React.lazy(()=>import('./pages/Home.jsx'));
+const Hotel=React.lazy(()=>import('./pages/Hotel.jsx'));
+const Cart=React.lazy(()=>import('./pages/Cart.jsx'));
+const Orders=React.lazy(()=>import('./pages/Orders.jsx'));
+const OrderDetail=React.lazy(()=>import('./pages/OrderDetail.jsx'));
+const Account=React.lazy(()=>import('./pages/Account.jsx'));
+const Auth=React.lazy(()=>import('./pages/Auth.jsx'));
+const OrderPlaced=React.lazy(()=>import('./pages/OrderPlaced.jsx'));
 const AdminShell=React.lazy(()=>import('./admin/AdminShell.jsx'));
 const AdminOrders=React.lazy(()=>import('./admin/Orders.jsx'));
 const AdminMenu=React.lazy(()=>import('./admin/Menu.jsx'));
@@ -29,7 +29,7 @@ class Boundary extends React.Component{constructor(p){super(p);this.state={faile
 function Title({children,title}){React.useEffect(()=>{document.title=`${title} · hotel-core`;},[title]);return children;}
 const SuspensePage=({children})=><React.Suspense fallback={<div className="page loading-lines" aria-label="Loading"><div/><div/><div/></div>}>{children}</React.Suspense>;
 export const router=createBrowserRouter([{path:'/',element:<Shell/>,errorElement:<Boundary><NotFound/></Boundary>,children:[
- {index:true,element:<Title title="Discover"><Home/></Title>},{path:'search',element:<Title title="Search"><Home/></Title>},{path:'hotel/:id',element:<Title title="Menu"><Hotel/></Title>},{path:'cart',element:<Title title="Your cart"><Cart/></Title>},{path:'order-placed',element:<Title title="Order confirmed"><OrderPlaced/></Title>},{path:'orders',element:<Protected><Title title="Your orders"><Orders/></Title></Protected>},{path:'orders/:id',element:<Protected><Title title="Order details"><OrderDetail/></Title></Protected>},{path:'account',element:<Protected><Title title="Account"><Account/></Title></Protected>},{path:'login',element:<Title title="Log in"><Auth/></Title>},
+ {index:true,element:<SuspensePage><Title title="Discover"><Home/></Title></SuspensePage>},{path:'search',element:<SuspensePage><Title title="Search"><Home/></Title></SuspensePage>},{path:'hotel/:id',element:<SuspensePage><Title title="Menu"><Hotel/></Title></SuspensePage>},{path:'cart',element:<SuspensePage><Title title="Your cart"><Cart/></Title></SuspensePage>},{path:'order-placed',element:<SuspensePage><Title title="Order confirmed"><OrderPlaced/></Title></SuspensePage>},{path:'orders',element:<SuspensePage><Protected><Title title="Your orders"><Orders/></Title></Protected></SuspensePage>},{path:'orders/:id',element:<SuspensePage><Protected><Title title="Order details"><OrderDetail/></Title></Protected></SuspensePage>},{path:'account',element:<SuspensePage><Protected><Title title="Account"><Account/></Title></Protected></SuspensePage>},{path:'login',element:<SuspensePage><Title title="Log in"><Auth/></Title></SuspensePage>},
  {path:'admin/:hotelId',element:<AdminGuard/>,children:[{element:<HotelGuard/>,children:[{element:<SuspensePage><AdminShell/></SuspensePage>,children:[{index:true,element:<Navigate to="orders" replace/>},{path:'orders',element:<SuspensePage><AdminOrders/></SuspensePage>},{path:'menu',element:<SuspensePage><AdminMenu/></SuspensePage>},{path:'reports',element:<SuspensePage><AdminReports/></SuspensePage>},{path:'settings',element:<SuspensePage><AdminSettings/></SuspensePage>}]}]}]},
  {path:'platform',element:<PlatformGuard/>,children:[{element:<SuspensePage><AdminShell/></SuspensePage>,children:[{index:true,element:<Navigate to="hotels" replace/>},{path:'hotels',element:<SuspensePage><PlatformHotels/></SuspensePage>},{path:'hotels/:hotelId',element:<SuspensePage><PlatformHotelDetail/></SuspensePage>},{path:'metrics',element:<SuspensePage><PlatformMetrics/></SuspensePage>}]}]},
  {path:'*',element:<NotFound/>}

@@ -58,9 +58,9 @@ async function openAddAdmin() {
 describe('stable input focus across forms and overlays', () => {
   beforeEach(() => { useSession.getState().clearSession(); useCart.getState().clear(); vi.restoreAllMocks(); });
 
-  it('keeps focus and node identity for every Add admin field in link mode', async () => {
+  it('keeps focus and node identity for the Add admin email field in link mode', async () => {
     mockPlatformApi();
-    await expectStableTypingFocus(openAddAdmin, ['User ID']);
+    await expectStableTypingFocus(openAddAdmin, ['Existing user email']);
   });
 
   it('keeps focus and node identity for every Add admin field in create mode', async () => {
@@ -75,13 +75,13 @@ describe('stable input focus across forms and overlays', () => {
   it('keeps link and create values when switching modes', async () => {
     mockPlatformApi();
     const { user } = await openAddAdmin();
-    const userId = screen.getByLabelText(/User ID/);
-    await user.type(userId, '12345');
+    const linkEmail = screen.getByLabelText('Existing user email');
+    await user.type(linkEmail, 'asha@example.test');
     await user.click(screen.getByRole('tab', { name: 'Create new admin' }));
     const email = screen.getByLabelText('Email');
-    await user.type(email, 'asha@example.test');
+    expect(email).toHaveValue('asha@example.test');
     await user.click(screen.getByRole('tab', { name: 'Link existing user' }));
-    expect(screen.getByLabelText('User ID')).toHaveValue('12345');
+    expect(screen.getByLabelText('Existing user email')).toHaveValue('asha@example.test');
     await user.click(screen.getByRole('tab', { name: 'Create new admin' }));
     expect(screen.getByLabelText('Email')).toHaveValue('asha@example.test');
   });
@@ -101,18 +101,17 @@ describe('stable input focus across forms and overlays', () => {
   it('sends only the selected Add admin request shape and preserves focus on validation errors', async () => {
     const requests = mockPlatformApi();
     const { user } = await openAddAdmin();
-    await user.click(screen.getByRole('button', { name: 'Link user' }));
-    const userId = screen.getByLabelText(/User ID/);
-    await user.type(userId, 'x');
+    const email = screen.getByLabelText('Existing user email');
+    await user.type(email, 'x');
     await user.keyboard('{Enter}');
-    expect(await screen.findByText('Enter a positive user ID.')).toBeInTheDocument();
-    expect(document.activeElement).toBe(userId);
-    expect(userId).toHaveValue('x');
-    await user.clear(userId);
-    await user.type(userId, '123');
+    expect(await screen.findByText('Enter a valid email address.')).toBeInTheDocument();
+    expect(document.activeElement).toBe(email);
+    expect(email).toHaveValue('x');
+    await user.clear(email);
+    await user.type(email, 'Customer@example.test');
     await user.click(screen.getByRole('button', { name: 'Link user' }));
-    await waitFor(() => expect(requests.find((request) => request.method === 'POST')?.body).toEqual({ user_id: 123 }));
-    expect(requests.find((request) => request.method === 'POST').body).not.toHaveProperty('email');
+    await waitFor(() => expect(requests.find((request) => request.method === 'POST')?.body).toEqual({ email: 'Customer@example.test' }));
+    expect(requests.find((request) => request.method === 'POST').body).not.toHaveProperty('user_id');
   });
 
   it('sends only create-mode fields when adding a new admin', async () => {

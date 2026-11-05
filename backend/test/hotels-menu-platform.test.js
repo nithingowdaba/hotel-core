@@ -7,6 +7,7 @@ const dotenv = require('dotenv');
 const mysql = require('mysql2/promise');
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+process.env.DB_NAME = 'hotel_core_test';
 const databaseName = process.env.DB_NAME || '';
 if (!/_test$/.test(databaseName)) {
   throw new Error('Hotel/menu/platform database tests refused to run: DB_NAME must end in _test.');
@@ -91,6 +92,9 @@ before(async () => {
   ids.adminA = await createUser('Admin A', 'admin-a@example.test');
   ids.adminB = await createUser('Admin B', 'admin-b@example.test');
   ids.customer = await createUser('Customer C', 'customer-c@example.test');
+  ids.emailLink = await createUser('Email Link', 'email-link@example.test');
+  ids.inactive = await createUser('Inactive User', 'inactive@example.test');
+  await connection.execute('UPDATE users SET is_active = FALSE WHERE id = ?', [ids.inactive]);
   ids.platform = await createUser('Platform P', 'platform-p@example.test', 'PLATFORM_ADMIN');
   const [hotelA] = await connection.execute(
     `INSERT INTO hotels (name, slug, status) VALUES ('Hotel A', 'hotel-a', 'active')`,
@@ -306,6 +310,78 @@ test('platform hotel and administrator management supports both linking modes', 
   assert.equal(removed.status, 200);
   const [remainingUser] = await connection.execute('SELECT id FROM users WHERE id = ?', [ids.customer]);
   assert.equal(remainingUser.length, 1);
+
+  const linkedByEmail = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform, body: { email: 'EMAIL-LINK@EXAMPLE.TEST' },
+  });
+  assert.equal(linkedByEmail.status, 201);
+  assert.equal((await linkedByEmail.json()).data.id, ids.emailLink);
+  const duplicateEmail = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform, body: { email: 'email-link@example.test' },
+  });
+  assert.equal(duplicateEmail.status, 409);
+  assert.equal((await duplicateEmail.json()).error.code, 'ALREADY_HOTEL_ADMIN');
+
+  const missingSelector = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform, body: {},
+  });
+  assert.equal(missingSelector.status, 400);
+  const bothSelectors = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform,
+    body: { user_id: ids.emailLink, email: 'email-link@example.test' },
+  });
+  assert.equal(bothSelectors.status, 400);
+
+  const unknown = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform, body: { email: 'unknown@example.test' },
+  });
+  const inactive = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform, body: { email: 'inactive@example.test' },
+  });
+  const platformUser = await request(`/api/platform/hotels/${hotel.id}/admins`, {
+    method: 'POST', token: tokens.platform, body: { email: 'platform-p@example.test' },
+  });
+  for (const response of [unknown, inactive, platformUser]) {
+    assert.equal(response.status, 404);
+    assert.deepEqual((await response.json()).error, {
+      code: 'USER_NOT_FOUND', message: 'Eligible user not found.',
+    });
+  }
+});
+
+test('public hotel and menu search treats percent and underscore as literal characters', async () => {
+  const [percentHotel] = await connection.execute(
+    `INSERT INTO hotels (name, slug, status) VALUES ('Literal % Hotel', 'literal-percent-hotel', 'active')`,
+  );
+  const [underscoreHotel] = await connection.execute(
+    `INSERT INTO hotels (name, slug, status) VALUES ('Literal _ Hotel', 'literal-underscore-hotel', 'active')`,
+  );
+  const [percentItem] = await connection.execute(
+    `INSERT INTO menu_items (hotel_id, name, category, price, is_veg, is_available)
+     VALUES (?, 'Literal % Dish', 'Search', 10.00, TRUE, TRUE)`, [ids.hotelA],
+  );
+  const [underscoreItem] = await connection.execute(
+    `INSERT INTO menu_items (hotel_id, name, category, price, is_veg, is_available)
+     VALUES (?, 'Literal _ Dish', 'Search', 10.00, TRUE, TRUE)`, [ids.hotelA],
+  );
+
+  const percentHotels = await request('/api/hotels?search=%25');
+  const percentHotelData = await percentHotels.json();
+  assert.equal(percentHotelData.meta.total, 1);
+  assert.equal(percentHotelData.data[0].id, percentHotel.insertId);
+  const underscoreHotels = await request('/api/hotels?search=%5F');
+  const underscoreHotelData = await underscoreHotels.json();
+  assert.equal(underscoreHotelData.meta.total, 1);
+  assert.equal(underscoreHotelData.data[0].id, underscoreHotel.insertId);
+
+  const percentMenu = await request(`/api/hotels/${ids.hotelA}/menu-items?search=%25`);
+  const percentMenuData = await percentMenu.json();
+  assert.equal(percentMenuData.meta.total, 1);
+  assert.equal(percentMenuData.data[0].id, percentItem.insertId);
+  const underscoreMenu = await request(`/api/hotels/${ids.hotelA}/menu-items?search=%5F`);
+  const underscoreMenuData = await underscoreMenu.json();
+  assert.equal(underscoreMenuData.meta.total, 1);
+  assert.equal(underscoreMenuData.data[0].id, underscoreItem.insertId);
 });
 
 test('suspended hotels are hidden publicly and reject admin writes while platform can read', async () => {
