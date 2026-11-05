@@ -3,8 +3,8 @@
 const { Router } = require('express');
 const { body, query } = require('express-validator');
 const { query: dbQuery } = require('../config/db');
-const { authenticate } = require('../middleware/auth');
-const { resolveHotel, requireHotelAdmin } = require('../middleware/tenant');
+const { authenticate, optionalAuthenticate } = require('../middleware/auth');
+const { resolveHotel, requireHotelAdmin, requireVisibleHotel } = require('../middleware/tenant');
 const { asyncHandler, single, collection, httpError } = require('../utils/http');
 const {
   positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody,
@@ -18,10 +18,7 @@ const nameRule = (field) => body(field).trim().isString().isLength({ min: 1, max
 const categoryRule = (field) => body(field).trim().isString().isLength({ min: 1, max: 80 });
 const textRule = (field) => body(field).optional({ nullable: true }).isString();
 function requirePublicActiveHotel(req, res, next) {
-  if (req.hotel.status !== 'active') {
-    return next(httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.'));
-  }
-  return next();
+  return requireVisibleHotel(req, res, next);
 }
 
 /** @openapi
@@ -58,7 +55,7 @@ function requirePublicActiveHotel(req, res, next) {
  *       404: { description: Hotel not found }
  */
 router.get('/:hotelId/menu-items', [
-  positiveId('hotelId'),
+  optionalAuthenticate, positiveId('hotelId'),
   rejectUnknownQuery(['search', 'category', 'available', 'veg', 'page', 'limit']),
   query('search').optional().isString().isLength({ max: 120 }),
   query('category').optional().isString().isLength({ max: 80 }),
@@ -106,7 +103,7 @@ router.get('/:hotelId/menu-items', [
  *       404: { description: Hotel or menu item not found }
  */
 router.get('/:hotelId/menu-items/:id', [
-  positiveId('hotelId'), positiveId('id'), rejectUnknownQuery([]), validate, resolveHotel, requirePublicActiveHotel,
+  optionalAuthenticate, positiveId('hotelId'), positiveId('id'), rejectUnknownQuery([]), validate, resolveHotel, requirePublicActiveHotel,
 ], asyncHandler(async (req, res) => {
   const [rows] = await dbQuery(
     `SELECT ${fields} FROM menu_items WHERE id = ? AND hotel_id = ? LIMIT 1`,

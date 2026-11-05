@@ -23,12 +23,18 @@ CREATE TABLE hotels (
   logo_url VARCHAR(500) NULL,
   cover_url VARCHAR(500) NULL,
   accepting_orders BOOLEAN NOT NULL DEFAULT TRUE,
-  status ENUM('active','suspended') NOT NULL DEFAULT 'active',
+  status ENUM('active','suspended','pending','rejected') NOT NULL DEFAULT 'active',
+  rejection_reason VARCHAR(500) NULL,
+  submitted_at TIMESTAMP NULL DEFAULT NULL,
+  approved_at TIMESTAMP NULL DEFAULT NULL,
+  approved_by BIGINT UNSIGNED NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_hotels_slug (slug),
-  KEY idx_hotels_status_name (status, name)
+  KEY idx_hotels_status_name (status, name),
+  KEY idx_hotels_approved_by (approved_by),
+  CONSTRAINT fk_hotels_approved_by FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE hotel_members (

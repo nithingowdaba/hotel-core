@@ -61,21 +61,23 @@ describe('customer order history and account', () => {
   });
 
   it('renders membership names from the /auth/me contract', async () => {
-    global.fetch.mockImplementation(async () => response({
-      id: 7, full_name: 'Asha', email: 'asha@example.test', phone: '9000000000', role: 'HOTEL_ADMIN',
-      admin_of: [{ hotel_id: 12, name: 'Harbor Hotel', slug: 'harbor-hotel' }],
-    }));
+    global.fetch.mockImplementation(async (url) => String(url).includes('/me/hotels')
+      ? response([{ hotel_id: 12, name: 'Harbor Hotel', slug: 'harbor-hotel', status: 'pending' }])
+      : response({
+        id: 7, full_name: 'Asha', email: 'asha@example.test', phone: '9000000000', role: 'HOTEL_ADMIN',
+        admin_of: [{ hotel_id: 12, name: 'Harbor Hotel', slug: 'harbor-hotel' }],
+      }));
     renderPage(<Account/>);
-    expect(await screen.findByRole('link', { name: 'Manage Harbor Hotel →' })).toHaveAttribute('href', '/admin/12');
+    expect(await screen.findByRole('link', { name: /Manage Harbor Hotel/ })).toHaveAttribute('href', '/admin/12');
     expect(screen.queryByText('Manage undefined')).not.toBeInTheDocument();
   });
 
   it('shows no hotel tools for users without memberships', async () => {
-    global.fetch.mockImplementation(async () => response({
-      id: 8, full_name: 'Customer', email: 'customer@example.test', phone: '9000000001', role: 'CUSTOMER', admin_of: [],
-    }));
+    global.fetch.mockImplementation(async (url) => String(url).includes('/me/hotels')
+      ? response([])
+      : response({ id: 8, full_name: 'Customer', email: 'customer@example.test', phone: '9000000001', role: 'CUSTOMER', admin_of: [] }));
     renderPage(<Account/>);
     expect(await screen.findByRole('heading', { name: 'Account' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Hotel tools' })).not.toBeInTheDocument();
+    expect(screen.getByText('You do not manage any hotels yet.')).toBeInTheDocument();
   });
 });

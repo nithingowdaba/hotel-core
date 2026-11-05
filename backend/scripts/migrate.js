@@ -158,12 +158,50 @@ async function runMigration(connection) {
   return { before, after };
 }
 
+async function multiTenantSchemaExists(connection) {
+  const requiredColumns = [
+    ['hotels', 'slug'], ['hotel_members', 'user_id'], ['menu_items', 'hotel_id'],
+    ['orders', 'hotel_id'], ['order_items', 'hotel_id'],
+  ];
+  for (const [table, column] of requiredColumns) {
+    if (!(await columnExists(connection, table, column))) return false;
+  }
+  const [roleRows] = await connection.execute(
+    `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'role' LIMIT 1`,
+  );
+  if (roleRows[0]?.COLUMN_TYPE !== "enum('CUSTOMER','PLATFORM_ADMIN')") return false;
+  const [foreignKeys] = await connection.execute(
+    `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'order_items'
+       AND CONSTRAINT_NAME IN ('fk_oi_order', 'fk_oi_menu')`,
+  );
+  return foreignKeys.length === 2;
+}
+
+async function runOnboardingMigration(connection) {
+  const migrationPath = path.resolve(__dirname, '..', 'database', 'migrations', '002-hotel-onboarding.sql');
+  const migrationSql = await fs.readFile(migrationPath, 'utf8');
+  const procedure = 'migrate_002_hotel_onboarding';
+  try {
+    await connection.query(migrationSql);
+    await connection.query(`CALL ${procedure}()`);
+  } finally {
+    await connection.query(`DROP PROCEDURE IF EXISTS ${procedure}`);
+  }
+}
+
 async function main() {
   const database = databaseFromArgs();
   const connection = await mysql.createConnection(connectionOptions({ database, multipleStatements: true }));
   try {
     console.log(`Running manual multi-tenancy migration on database "${database}".`);
-    await runMigration(connection);
+    if (await multiTenantSchemaExists(connection)) {
+      console.log('Multi-tenancy migration 001 is already applied; preserving existing hotel statuses.');
+    } else {
+      await runMigration(connection);
+    }
+    await runOnboardingMigration(connection);
     console.log('Migration complete.');
   } finally {
     await connection.end();
@@ -177,4 +215,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runMigration };
+module.exports = { runMigration, runOnboardingMigration, multiTenantSchemaExists };

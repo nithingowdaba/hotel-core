@@ -21,7 +21,7 @@ if (process.env.DB_PASSWORD === undefined) {
   throw new Error('Database tests require DB_PASSWORD (it may be empty if the test account has no password).');
 }
 
-const { runMigration } = require('../scripts/migrate');
+const { runMigration, runOnboardingMigration } = require('../scripts/migrate');
 const { initDatabase } = require('../scripts/init-db');
 const { SCHEMA_PATH } = require('../scripts/db-schema');
 const { seedDatabase } = require('../scripts/seed-db');
@@ -193,6 +193,7 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
       const columnSet = new Set(columns.map((row) => `${row.TABLE_NAME}.${row.COLUMN_NAME}`));
       for (const column of [
         'hotels.cuisines', 'hotels.logo_url', 'hotels.cover_url', 'hotels.accepting_orders',
+        'hotels.rejection_reason', 'hotels.submitted_at', 'hotels.approved_at', 'hotels.approved_by',
         'menu_items.is_veg', 'menu_items.image_url', 'menu_items.hotel_id',
         'orders.hotel_id', 'order_items.hotel_id', 'users.is_active',
       ]) {
@@ -214,6 +215,11 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
         'chk_order_total', 'fk_oi_menu', 'fk_oi_order',
       ]);
       assert.match(schema, /CREATE TABLE users/);
+      const [[statusColumn]] = await connection.execute(
+        `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'hotels' AND COLUMN_NAME = 'status'`, [databaseName],
+      );
+      assert.equal(statusColumn.COLUMN_TYPE, "enum('active','suspended','pending','rejected')");
     });
 
     await t.test('migration preserves orders/items and links old ADMIN to hotel 1', async () => {
@@ -262,6 +268,22 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
       );
       assert.equal(Number(repeatCounts[0].order_count), 1);
       assert.equal(Number(repeatCounts[0].item_count), 1);
+
+      await connection.execute("UPDATE hotels SET status = 'suspended' WHERE id = 1");
+      const [activeHotel] = await connection.execute(
+        `INSERT INTO hotels (name, slug, status) VALUES ('Migration Active', 'migration-active', 'active')`,
+      );
+      await runOnboardingMigration(connection);
+      const [hotelStatuses] = await connection.execute(
+        'SELECT id, status FROM hotels WHERE id IN (?, ?) ORDER BY id', [1, activeHotel.insertId],
+      );
+      assert.deepEqual(hotelStatuses.map((row) => row.status), ['suspended', 'active']);
+      await runOnboardingMigration(connection);
+      const [repeatStatuses] = await connection.execute(
+        'SELECT id, status FROM hotels WHERE id IN (?, ?) ORDER BY id', [1, activeHotel.insertId],
+      );
+      assert.deepEqual(repeatStatuses.map((row) => row.status), ['suspended', 'active']);
+      await connection.execute('DELETE FROM hotels WHERE id = ?', [activeHotel.insertId]);
     });
 
     await t.test('composite foreign keys reject mismatched order and menu tenants', async () => {

@@ -42,7 +42,7 @@ Rules:
 1. A hotel admin is also a normal user (`role = 'CUSTOMER'` plus membership rows). A user may administer several hotels if the platform admin links them.
 2. Customers are **never** tied to a hotel. Only hotel admins have hotel links.
 3. `PLATFORM_ADMIN` accounts are created only by CLI script, never through any API.
-4. **No self-signup for hotels** in v1. A platform admin creates the hotel and its admin.
+4. Hotel owners can self-register a hotel for platform approval. New hotels are pending by default; platform admins approve or reject them. `AUTO_APPROVE_HOTELS=true` is an explicit deployment override.
 
 ### 1.2 In scope (v1)
 - Multi-tenancy (tables, middleware, migration of existing data)
@@ -55,10 +55,11 @@ Rules:
 - Minimal observability: structured request logs and an in-memory metrics endpoint
 - Deployment to GCP (single VM, Docker Compose, nginx), backups
 - Hotel profile (description, cuisines, images, open/closed switch)
+- Hotel self-registration and platform approval (§5.3, §5.7)
 - **UI: consumer-grade, Swiggy/Blinkit-style app (§14):** hotel discovery → hotel menu → cart → checkout → orders; hotel admin panel; platform admin panel
 
 ### 1.3 Out of scope (do NOT build)
-Hotel self-signup/approval flow, payment gateway, per-date pricing, richer order statuses (confirmed/preparing/ready/out-for-delivery), delivery/rider tracking, maps/geolocation, ratings & reviews, coupons/offers, password reset, refresh tokens, per-hotel subdomains, per-hotel databases (see §1.0), multi-hotel carts, cross-hotel dish search, notifications, Redis/queues, microservices, full monitoring dashboard.
+Payment gateway, per-date pricing, richer order statuses (confirmed/preparing/ready/out-for-delivery), delivery/rider tracking, maps/geolocation, ratings & reviews, coupons/offers, password reset, refresh tokens, per-hotel subdomains, per-hotel databases (see §1.0), multi-hotel carts, cross-hotel dish search, notifications, Redis/queues, microservices, full monitoring dashboard.
 
 ---
 
@@ -163,12 +164,18 @@ CREATE TABLE hotels (
   logo_url VARCHAR(500) NULL,                     -- https URL
   cover_url VARCHAR(500) NULL,                    -- https URL
   accepting_orders BOOLEAN NOT NULL DEFAULT TRUE, -- hotel admin's open/closed switch
-  status ENUM('active','suspended') NOT NULL DEFAULT 'active',  -- platform admin's switch
+  status ENUM('active','suspended','pending','rejected') NOT NULL DEFAULT 'active',
+  rejection_reason VARCHAR(500) NULL,
+  submitted_at TIMESTAMP NULL DEFAULT NULL,
+  approved_at TIMESTAMP NULL DEFAULT NULL,
+  approved_by BIGINT UNSIGNED NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_hotels_slug (slug),
-  KEY idx_hotels_status_name (status, name)
+  KEY idx_hotels_status_name (status, name),
+  KEY idx_hotels_approved_by (approved_by),
+  CONSTRAINT fk_hotels_approved_by FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE hotel_members (                      -- hotel admins only
@@ -256,6 +263,9 @@ Manual, idempotent where possible, uses `INFORMATION_SCHEMA` checks (this MySQL 
 8. Add the new columns with defaults (`menu_items.is_veg` TRUE, `image_url` NULL, hotel profile columns NULL, `accepting_orders` TRUE); the hotel admin corrects veg flags later.
 9. Print before/after row counts.
 
+### 4.1.2 Hotel onboarding migration (`backend/database/migrations/002-hotel-onboarding.sql`)
+The idempotent follow-up migration adds `pending` and `rejected` statuses plus rejection/submission/approval metadata. It preserves existing active and suspended statuses and is run by `npm run migrate`; it does not run on server startup.
+
 ### 4.2 Seed (`backend/database/seed.sql`, dev/demo only)
 Hotels `udupi-hotel` and `divum-vendor`, each with 8–12 menu items across 3–4 categories, with veg/non-veg flags and placeholder `image_url`s (files in `public/img/`), plus cuisines and cover/logo on each hotel. Platform admin is created by script, never by seed.
 The schema and seed SQL do not create or switch databases; scripts must connect to an explicitly selected, validated database. The demo seed is idempotent and limited to `_dev` and `_test` database names. A reset is permitted only for an `_test` database with an exact-name confirmation.
@@ -280,6 +290,7 @@ Legend: **Public** = no token. **Auth** = any logged-in active user. **HA** = ho
 | `POST /auth/register` | Public, rate-limited | `{full_name, email, phone, password(8–72)}` → creates `CUSTOMER`. Any submitted role is ignored. 409 `EMAIL_IN_USE` |
 | `POST /auth/login` | Public, rate-limited | `{email, password}` → `{token, user}`. Same error for unknown email and wrong password. Inactive user → 401 |
 | `GET /auth/me` | Auth | Returns user (no hash) plus `admin_of: [{hotel_id, name, slug}]` |
+| `GET /me/hotels` | Auth | Lists the user's hotel memberships and each hotel's approval status/rejection reason |
 
 JWT: `sub` = user id, `iss` = `hotel-core`, expiry 1h, secret ≥ 32 chars from env.
 
@@ -287,10 +298,12 @@ JWT: `sub` = user id, `iss` = `hotel-core`, expiry 1h, secret ≥ 32 chars from 
 | Method & path | Access | Notes |
 |---|---|---|
 | `GET /hotels` | Public | Active hotels only. Query: `search` (name/cuisines), `page`, `limit`. Fields: id, name, slug, description, cuisines, address, logo_url, cover_url, accepting_orders |
-| `GET /hotels/:hotelId` | Public | Active hotel only |
+| `POST /hotels/register` | Public or Auth | Anonymous body `{owner:{name,email,password},hotel:{name,phone,...}}`; authenticated body `{hotel:{name,phone,...}}`. Creates a pending hotel and ADMIN membership; anonymous response includes token/user. Email must be new; slug collisions return 409 `SLUG_IN_USE`. Maximum three pending hotels per owner. `AUTO_APPROVE_HOTELS=true` opts into immediate activation. |
+| `GET /hotels/:hotelId` | Public or owning Auth/PA | Active hotel is public; pending/rejected profile is visible only to its authenticated member or a platform admin |
 | `GET /hotels/:hotelId/menu` | Public | **Grouped menu for the UI:** `{ categories: [{ name, items: [...] }] }`, all of the hotel's items in one query (cap 500), ordered by category then name. Query `veg=true` for veg only. Unavailable items are included with `is_available:false` |
 | `GET /hotels/:hotelId/menu-items` | Public | Query: `search`, `category`, `available`, `veg`, `page`, `limit`. Default customers' view: `available` unfiltered, UI hides unavailable |
 | `GET /hotels/:hotelId/menu-items/:id` | Public | Must match hotel |
+| `POST /hotels/:hotelId/resubmit` | HA | Rejected hotel only; clears rejection reason and returns it to pending review |
 
 ### 5.4 Hotel admin: menu
 | Method & path | Access | Body |
@@ -305,7 +318,7 @@ Image/logo/cover URLs must be `https://` (validated, max 500). There is no delet
 ### 5.5 Orders
 | Method & path | Access | Notes |
 |---|---|---|
-| `POST /hotels/:hotelId/orders` | Auth (active customer) | `{payment_method, items:[{menu_item_id, quantity 1–999}]}`. Hotel must be `active` and `accepting_orders` (else 409 `HOTEL_CLOSED`). All items must belong to `:hotelId` and be available. Server computes price. Name/phone come from DB user. 201 returns order + items |
+| `POST /hotels/:hotelId/orders` | Auth (active customer) | `{payment_method, items:[{menu_item_id, quantity 1–999}]}`. Hotel must be `active` and `accepting_orders` (else 409 `HOTEL_CLOSED`); pending/rejected hotels return `HOTEL_PENDING`/`HOTEL_REJECTED`. All items must belong to `:hotelId` and be available. Server computes price. Name/phone come from DB user. 201 returns order + items |
 | `GET /me/orders` | Auth | Own orders across all hotels, newest first. Query `status` (`pending|completed|cancelled`), pagination. Include `hotel_id` and hotel `name` via JOIN |
 | `GET /me/orders/:orderId` | Auth | Own order with items, else 404 |
 | `PATCH /me/orders/:orderId/cancel` | Auth | Own, active pending only. Else 409 `CANCELLATION_NOT_ALLOWED` |
@@ -325,15 +338,17 @@ Only `status='completed' AND cancelled_at IS NULL`. Date filters use half-open r
 | Method & path | Body / notes |
 |---|---|
 | `POST /platform/hotels` | `{name, slug?, description?, cuisines?, address?, phone?}` → slug auto-generated from name if absent; 409 on duplicate slug |
-| `GET /platform/hotels` | All statuses, pagination |
+| `GET /platform/hotels` | All statuses, pagination; optional `status` filter |
 | `PATCH /platform/hotels/:hotelId` | name, description, cuisines, address, phone, logo_url, cover_url, `status` (`active|suspended`) |
+| `POST /platform/hotels/:hotelId/approve` | Pending only; records approver/time and activates the hotel |
+| `POST /platform/hotels/:hotelId/reject` | Pending only; requires a 1–500 character `reason` |
 | `GET /platform/hotels/:hotelId/admins` | List admins of hotel |
 | `POST /platform/hotels/:hotelId/admins` | Exactly one mode: `{user_id}` or `{email}` (link an existing active `CUSTOMER`; email lookup is case-insensitive; platform admins and inactive users are ineligible; neither/both selectors are rejected; ineligible or unknown email returns generic 404 `USER_NOT_FOUND`) **or** `{full_name, email, phone, password}` (create user + link, in one transaction). Duplicate link returns 409 |
 | `DELETE /platform/hotels/:hotelId/admins/:userId` | Remove link only; the user account stays |
 | `GET /platform/metrics` | In-memory request metrics (§8) |
 
 ### 5.8 Error codes (additions)
-`HOTEL_NOT_FOUND` 404, `HOTEL_SUSPENDED` 403, `MENU_ITEM_NOT_FOUND` 404, `INVALID_MENU_ITEM` 400, `ITEM_UNAVAILABLE` 409, `MENU_ITEM_EXISTS` 409, `ALREADY_HOTEL_ADMIN` 409, `SLUG_IN_USE` 409, `HOTEL_CLOSED` 409, plus existing ones.
+`HOTEL_NOT_FOUND` 404, `HOTEL_SUSPENDED` 403, `HOTEL_PENDING` 403, `HOTEL_REJECTED` 403, `HOTEL_LIMIT_REACHED` 409, `INVALID_HOTEL_TRANSITION` 409, `MENU_ITEM_NOT_FOUND` 404, `INVALID_MENU_ITEM` 400, `ITEM_UNAVAILABLE` 409, `MENU_ITEM_EXISTS` 409, `ALREADY_HOTEL_ADMIN` 409, `SLUG_IN_USE` 409, `HOTEL_CLOSED` 409, plus existing ones.
 
 ---
 
@@ -580,9 +595,15 @@ Layout: left sidebar on desktop, top tabs on mobile. Hotel switcher in the heade
 - **Settings:** accepting-orders toggle (Open/Closed), description, cuisines, address, phone, logo/cover URLs with preview.
 
 ### 14.6 Platform admin panel (`/platform/...`)
-- **Hotels:** table (name, slug, status chip, admins count, created), search, **Create hotel** modal (name, cuisines, address, phone), Suspend/Activate action with confirmation.
+- **Hotels:** table (name, slug, status chip, admins count, created), search, status filter and pending approval count, **Create hotel** modal (name, cuisines, address, phone), Suspend/Activate action with confirmation. Pending applications can be approved or rejected with a reason.
 - **Hotel detail:** admins list; **Add admin** (link an existing active customer by user ID or case-insensitive email, **or** create new), remove admin with confirmation.
 - **Metrics:** table from `/platform/metrics` (route, count, errors, p50/p95/max), refresh button.
+
+### 14.6.1 Hotel partner onboarding
+- `/partner` accepts anonymous owner/account and hotel details or hotel details from an authenticated account. New hotels appear in the owner's Account under **My hotels**.
+- Pending hotels allow profile editing but cannot receive orders. Hotel admin navigation hides Live orders and shows a persistent pending banner.
+- Rejected hotels show the platform reason, allow profile edits, and can be resubmitted. Resubmission returns the hotel to pending review.
+- The platform hotels view exposes a pending approval queue; approval activates public listing/orders and rejection stores the reason. Platform metrics include pending hotel count.
 
 ### 14.7 States & feedback
 - **Loading:** skeleton cards/rows matching final layout (no full-page spinners).

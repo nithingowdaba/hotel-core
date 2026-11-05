@@ -28,6 +28,29 @@ const resolveHotel = asyncHandler(async (req, res, next) => {
   next();
 });
 
+const requireVisibleHotel = asyncHandler(async (req, res, next) => {
+  if (req.hotel?.status === 'active') return next();
+  if (req.user && req.hotel && req.hotel.status !== 'suspended') {
+    if (req.user.role === 'PLATFORM_ADMIN') return next();
+    const [rows] = await query(
+      'SELECT user_id FROM hotel_members WHERE user_id = ? AND hotel_id = ? LIMIT 1',
+      [req.user.id, req.hotel.id],
+    );
+    if (rows.length) return next();
+  }
+  return next(httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.'));
+});
+
+const requireOrderableHotel = (req, res, next) => {
+  if (req.hotel?.status === 'pending') {
+    return next(httpError(403, 'HOTEL_PENDING', 'This hotel is awaiting platform approval.'));
+  }
+  if (req.hotel?.status === 'rejected') {
+    return next(httpError(403, 'HOTEL_REJECTED', 'This hotel is not approved for orders.'));
+  }
+  return next();
+};
+
 const requireHotelAdmin = asyncHandler(async (req, res, next) => {
   if (!req.user || !req.hotel) throw httpError(403, 'FORBIDDEN', 'You do not have access to this hotel.');
   if (req.user.role === 'PLATFORM_ADMIN') return next();
@@ -40,4 +63,4 @@ const requireHotelAdmin = asyncHandler(async (req, res, next) => {
   next();
 });
 
-module.exports = { resolveHotel, requireHotelAdmin };
+module.exports = { resolveHotel, requireHotelAdmin, requireVisibleHotel, requireOrderableHotel };

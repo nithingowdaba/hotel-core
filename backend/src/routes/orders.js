@@ -4,7 +4,7 @@ const { Router } = require('express');
 const { body, query } = require('express-validator');
 const { query: dbQuery } = require('../config/db');
 const { authenticate } = require('../middleware/auth');
-const { resolveHotel, requireHotelAdmin } = require('../middleware/tenant');
+const { resolveHotel, requireHotelAdmin, requireOrderableHotel } = require('../middleware/tenant');
 const { asyncHandler, single, collection, httpError } = require('../utils/http');
 const { positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody, validate } = require('./routeUtils');
 const { istDateToUtc, shiftDate } = require('../utils/time');
@@ -60,7 +60,7 @@ router.post('/:hotelId/orders', [
     && Object.keys(item).every((key) => ['menu_item_id', 'quantity'].includes(key)))),
   body('items.*.menu_item_id').matches(/^[1-9]\d*$/).bail().custom((value) => Number.isSafeInteger(Number(value))),
   body('items.*.quantity').matches(/^[1-9]\d*$/).bail().custom((value) => Number(value) <= 999),
-  validate, resolveHotel,
+  validate, resolveHotel, requireOrderableHotel,
 ], asyncHandler(async (req, res) => {
   const items = req.body.items.map((item) => ({ menu_item_id: Number(item.menu_item_id), quantity: Number(item.quantity) }));
   const order = await createOrder({ hotel: req.hotel, user: req.user, items, paymentMethod: req.body.payment_method });
@@ -98,7 +98,7 @@ router.get('/:hotelId/orders', [
   authenticate, positiveId('hotelId'), rejectUnknownQuery(['page', 'limit', 'status', 'date']),
   ...paginationRules(), query('status').optional().isIn(['pending', 'completed', 'cancelled']),
   query('date').optional().matches(/^\d{4}-\d{2}-\d{2}$/).bail().custom((value) => { try { istDateToUtc(value); return true; } catch { return false; } }), validate,
-  resolveHotel, requireHotelAdmin,
+  resolveHotel, requireOrderableHotel, requireHotelAdmin,
 ], asyncHandler(async (req, res) => {
   const { page, limit, offset } = pagination(req);
   const status = req.query.status || null;
@@ -152,7 +152,7 @@ router.get('/:hotelId/orders', [
  *       403: { description: Hotel administrator access required }
  *       404: { description: Order not found }
  */
-router.get('/:hotelId/orders/:orderId', [authenticate, positiveId('hotelId'), positiveId('orderId'), rejectUnknownQuery([]), validate, resolveHotel, requireHotelAdmin], asyncHandler(async (req, res) => {
+router.get('/:hotelId/orders/:orderId', [authenticate, positiveId('hotelId'), positiveId('orderId'), rejectUnknownQuery([]), validate, resolveHotel, requireOrderableHotel, requireHotelAdmin], asyncHandler(async (req, res) => {
   const [rows] = await dbQuery('SELECT * FROM orders WHERE id = ? AND hotel_id = ? LIMIT 1', [req.params.orderId, req.hotel.id]);
   if (!rows.length) throw httpError(404, 'ORDER_NOT_FOUND', 'Order not found.');
   const [items] = await dbQuery('SELECT menu_item_id, item_name, unit_price, quantity, subtotal FROM order_items WHERE order_id = ? AND hotel_id = ? ORDER BY id', [req.params.orderId, req.hotel.id]);
@@ -184,7 +184,7 @@ router.get('/:hotelId/orders/:orderId', [authenticate, positiveId('hotelId'), po
  *       404: { description: Order not found }
  *       409: { description: Order is not pending }
  */
-router.patch('/:hotelId/orders/:orderId/status', [authenticate, positiveId('hotelId'), positiveId('orderId'), rejectUnknownQuery([]), rejectUnknownBody(['status']), body('status').equals('completed'), validate, resolveHotel, requireHotelAdmin], asyncHandler(async (req, res) => {
+router.patch('/:hotelId/orders/:orderId/status', [authenticate, positiveId('hotelId'), positiveId('orderId'), rejectUnknownQuery([]), rejectUnknownBody(['status']), body('status').equals('completed'), validate, resolveHotel, requireOrderableHotel, requireHotelAdmin], asyncHandler(async (req, res) => {
   await updateOrderState({ hotelId: req.hotel.id, orderId: req.params.orderId, nextState: 'completed' });
   const [rows] = await dbQuery('SELECT * FROM orders WHERE id = ? AND hotel_id = ? LIMIT 1', [req.params.orderId, req.hotel.id]);
   const [items] = await dbQuery('SELECT menu_item_id, item_name, unit_price, quantity, subtotal FROM order_items WHERE order_id = ? AND hotel_id = ? ORDER BY id', [req.params.orderId, req.hotel.id]);
@@ -206,7 +206,7 @@ router.patch('/:hotelId/orders/:orderId/status', [authenticate, positiveId('hote
  *       404: { description: Order not found }
  *       409: { description: Cancellation is not allowed }
  */
-router.patch('/:hotelId/orders/:orderId/cancel', [authenticate, positiveId('hotelId'), positiveId('orderId'), rejectUnknownQuery([]), rejectUnknownBody([]), validate, resolveHotel, requireHotelAdmin], asyncHandler(async (req, res) => {
+router.patch('/:hotelId/orders/:orderId/cancel', [authenticate, positiveId('hotelId'), positiveId('orderId'), rejectUnknownQuery([]), rejectUnknownBody([]), validate, resolveHotel, requireOrderableHotel, requireHotelAdmin], asyncHandler(async (req, res) => {
   await updateOrderState({ hotelId: req.hotel.id, orderId: req.params.orderId, nextState: 'cancelled' });
   const [rows] = await dbQuery('SELECT * FROM orders WHERE id = ? AND hotel_id = ? LIMIT 1', [req.params.orderId, req.hotel.id]);
   single(res, { ...rows[0], status: 'cancelled' });

@@ -31,4 +31,9 @@ const authenticate = asyncHandler(async (req, res, next) => {
   next();
 });
 
-module.exports = { authenticate };
+function optionalAuthenticate(req, res, next) {
+  if (!req.get('authorization')) return next();
+  return authenticate(req, res, next);
+}
+
+module.exports = { authenticate, optionalAuthenticate };

@@ -11,6 +11,25 @@ const { updateOrderState } = require('../services/orderService');
 const router = Router();
 router.use(authenticate);
 
+/** @openapi
+ * /api/me/hotels:
+ *   get:
+ *     tags: [Hotels]
+ *     summary: List hotels administered by the current user
+ *     responses:
+ *       200: { description: Hotel memberships and onboarding status }
+ *       401: { description: Authentication required }
+ */
+router.get('/hotels', rejectUnknownQuery([]), validate, asyncHandler(async (req, res) => {
+  const [rows] = await dbQuery(
+    `SELECT h.id AS hotel_id, h.name, h.slug, h.status, h.rejection_reason,
+            h.submitted_at, h.approved_at, h.accepting_orders
+     FROM hotel_members hm JOIN hotels h ON h.id = hm.hotel_id
+     WHERE hm.user_id = ? ORDER BY hm.created_at DESC, hm.hotel_id DESC`, [req.user.id],
+  );
+  single(res, rows);
+}));
+
 function itemSummary(items) {
   let result = items.map((item) => `${item.item_name} x${item.quantity}`).join(', ');
   if (result.length > 255) result = `${result.slice(0, 252)}...`;

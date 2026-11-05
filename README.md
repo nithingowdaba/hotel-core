@@ -12,6 +12,7 @@ npm test
 ```
 
 Copy `backend/.env.example` to `backend/.env` and set local configuration before starting the backend.
+Development uses the copied `backend/.env` with `DB_NAME=hotel_core_dev`. Keep `AUTO_APPROVE_HOTELS=false` for platform review; setting it to `true` explicitly activates new hotel registrations immediately.
 
 ## Database setup
 
