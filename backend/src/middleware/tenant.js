@@ -21,7 +21,12 @@ const resolveHotel = asyncHandler(async (req, res, next) => {
   if (hotel.status === 'suspended') {
     if (isWrite) throw httpError(403, 'HOTEL_SUSPENDED', 'This hotel is suspended.');
     if (req.user?.role !== 'PLATFORM_ADMIN') {
-      throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
+      const [members] = req.user
+        ? await query('SELECT user_id FROM hotel_members WHERE user_id = ? AND hotel_id = ? LIMIT 1', [req.user.id, hotel.id])
+        : [[]];
+      if (!members.length) {
+        throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
+      }
     }
   }
   req.hotel = hotel;
@@ -30,7 +35,7 @@ const resolveHotel = asyncHandler(async (req, res, next) => {
 
 const requireVisibleHotel = asyncHandler(async (req, res, next) => {
   if (req.hotel?.status === 'active') return next();
-  if (req.user && req.hotel && req.hotel.status !== 'suspended') {
+  if (req.user && req.hotel) {
     if (req.user.role === 'PLATFORM_ADMIN') return next();
     const [rows] = await query(
       'SELECT user_id FROM hotel_members WHERE user_id = ? AND hotel_id = ? LIMIT 1',
@@ -43,10 +48,10 @@ const requireVisibleHotel = asyncHandler(async (req, res, next) => {
 
 const requireOrderableHotel = (req, res, next) => {
   if (req.hotel?.status === 'pending') {
-    return next(httpError(403, 'HOTEL_PENDING', 'This hotel is awaiting platform approval.'));
+    return next(httpError(403, 'HOTEL_PENDING', 'This legacy hotel is not active.'));
   }
   if (req.hotel?.status === 'rejected') {
-    return next(httpError(403, 'HOTEL_REJECTED', 'This hotel is not approved for orders.'));
+    return next(httpError(403, 'HOTEL_REJECTED', 'This legacy hotel is not active.'));
   }
   return next();
 };

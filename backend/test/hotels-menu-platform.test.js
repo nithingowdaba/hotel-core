@@ -384,22 +384,55 @@ test('public hotel and menu search treats percent and underscore as literal char
   assert.equal(underscoreMenuData.data[0].id, underscoreItem.insertId);
 });
 
-test('suspended hotels are hidden publicly and reject admin writes while platform can read', async () => {
+test('platform suspension is enforced for public reads, direct orders, and tenant writes', async () => {
   await connection.execute('UPDATE hotels SET status = \'suspended\' WHERE id = ?', [ids.hotelB]);
   const publicHotel = await request(`/api/hotels/${ids.hotelB}`);
   assert.equal(publicHotel.status, 404);
   const publicList = await request('/api/hotels');
   assert.equal((await publicList.json()).data.some((hotel) => hotel.id === ids.hotelB), false);
+  const publicSearch = await request('/api/hotels?search=Hotel%20B');
+  assert.equal((await publicSearch.json()).meta.total, 0);
+  const ownerProfile = await request(`/api/hotels/${ids.hotelB}`, { token: tokens.adminB });
+  assert.equal(ownerProfile.status, 200);
+  assert.equal((await ownerProfile.json()).data.status, 'suspended');
 
   const write = await request(`/api/hotels/${ids.hotelB}/menu-items/${ids.itemB}`, {
     method: 'PATCH', token: tokens.adminB, body: { name: 'Blocked' },
   });
   assert.equal(write.status, 403);
   assert.equal((await write.json()).error.code, 'HOTEL_SUSPENDED');
+  const spoofBody = await request(`/api/hotels/${ids.hotelB}`, {
+    method: 'PATCH', token: tokens.adminB, body: { status: 'active' },
+  });
+  assert.equal(spoofBody.status, 400);
+  const spoofQuery = await request(`/api/hotels/${ids.hotelB}?status=active`, {
+    method: 'PATCH', token: tokens.adminB, body: { description: 'spoof' },
+  });
+  assert.equal(spoofQuery.status, 400);
+  const directOrder = await request(`/api/hotels/${ids.hotelB}/orders`, {
+    method: 'POST', token: tokens.customer,
+    body: { payment_method: 'cash', items: [{ menu_item_id: ids.itemB, quantity: 1 }] },
+  });
+  assert.equal(directOrder.status, 403);
+  assert.equal((await directOrder.json()).error.code, 'HOTEL_SUSPENDED');
 
   const platformHotels = await request('/api/platform/hotels', { token: tokens.platform });
   assert.equal(platformHotels.status, 200);
   assert.ok((await platformHotels.json()).data.some((hotel) => hotel.id === ids.hotelB && hotel.status === 'suspended'));
+  const customerReactivate = await request(`/api/platform/hotels/${ids.hotelB}`, {
+    method: 'PATCH', token: tokens.customer, body: { status: 'active' },
+  });
+  assert.equal(customerReactivate.status, 403);
+  const querySpoof = await request(`/api/platform/hotels/${ids.hotelB}?status=suspended`, {
+    method: 'PATCH', token: tokens.platform, body: { description: 'query must not set status' },
+  });
+  assert.equal(querySpoof.status, 400);
+  const reactivated = await request(`/api/platform/hotels/${ids.hotelB}`, {
+    method: 'PATCH', token: tokens.platform, body: { status: 'active' },
+  });
+  assert.equal(reactivated.status, 200);
+  assert.equal((await reactivated.json()).data.status, 'active');
+  assert.equal((await request(`/api/hotels/${ids.hotelB}`)).status, 200);
 });
 
 test('non-platform users cannot access platform administration', async () => {
@@ -552,7 +585,7 @@ test('orders, customer history, hotel transitions, reports, and metrics enforce 
   assert.ok((await metrics.json()).data.routes.some((route) => route.route.includes('/api/hotels/:hotelId/orders')));
 });
 
-test('hotel self-registration creates an owner membership and platform approval controls public access', async () => {
+test('anonymous and existing-customer hotel registration activate immediately with owner membership', async () => {
   const registration = await request('/api/hotels/register', {
     method: 'POST', body: {
       owner: { name: 'Partner Owner', email: 'partner-owner@example.test', password: 'Partner-pass-0123' },
@@ -561,76 +594,116 @@ test('hotel self-registration creates an owner membership and platform approval 
   });
   assert.equal(registration.status, 201);
   const result = (await registration.json()).data;
-  assert.equal(result.hotel.status, 'pending');
+  assert.equal(result.hotel.status, 'active');
   assert.ok(result.token);
   const ownerToken = result.token;
-  const queue = await request('/api/platform/hotels?status=pending', { token: tokens.platform });
-  assert.equal(queue.status, 200);
-  assert.ok((await queue.json()).data.some((hotel) => hotel.id === result.hotel.id));
-  const approvalMetrics = await request('/api/platform/metrics', { token: tokens.platform });
-  assert.ok((await approvalMetrics.json()).data.pending_hotels >= 1);
-
+  const [ownerRows] = await connection.execute(
+    `SELECT hm.user_id, hm.hotel_id, hm.role, h.status, u.email FROM hotel_members hm
+     JOIN users u ON u.id = hm.user_id JOIN hotels h ON h.id = hm.hotel_id WHERE h.id = ?`,
+    [result.hotel.id],
+  );
+  assert.equal(ownerRows.length, 1);
+  assert.equal(ownerRows[0].role, 'ADMIN');
+  assert.equal(ownerRows[0].status, 'active');
+  assert.equal(ownerRows[0].email, 'partner-owner@example.test');
   const anonymous = await request(`/api/hotels/${result.hotel.id}`);
-  assert.equal(anonymous.status, 404);
-  const anonymousMenu = await request(`/api/hotels/${result.hotel.id}/menu`);
-  assert.equal(anonymousMenu.status, 404);
-  const anonymousItems = await request(`/api/hotels/${result.hotel.id}/menu-items`);
-  assert.equal(anonymousItems.status, 404);
+  assert.equal(anonymous.status, 200);
+  const publicSearch = await request(`/api/hotels?search=${encodeURIComponent(result.hotel.name)}`);
+  assert.ok((await publicSearch.json()).data.some((hotel) => hotel.id === result.hotel.id));
   const ownerRead = await request(`/api/hotels/${result.hotel.id}`, { token: ownerToken });
   assert.equal(ownerRead.status, 200);
   assert.equal((await request(`/api/hotels/${result.hotel.id}/menu`, { token: ownerToken })).status, 200);
   assert.equal((await request(`/api/hotels/${result.hotel.id}/menu-items`, { token: ownerToken })).status, 200);
   const ownerMenuCreate = await request(`/api/hotels/${result.hotel.id}/menu-items`, {
     method: 'POST', token: ownerToken,
-    body: { name: 'Pending Test Dish', category: 'Test', price: '10.00' },
+    body: { name: 'Self Service Test Dish', category: 'Test', price: '10.00' },
   });
   assert.equal(ownerMenuCreate.status, 201);
-  const pendingItemId = (await ownerMenuCreate.json()).data.id;
-  assert.equal((await request(`/api/hotels/${result.hotel.id}/menu-items/${pendingItemId}`)).status, 404);
-  assert.equal((await request(`/api/hotels/${result.hotel.id}/menu-items/${pendingItemId}`, { token: ownerToken })).status, 200);
-  const myHotels = await request('/api/me/hotels', { token: ownerToken });
-  assert.equal((await myHotels.json()).data[0].status, 'pending');
+  const itemId = (await ownerMenuCreate.json()).data.id;
+  assert.equal((await request(`/api/hotels/${result.hotel.id}/menu-items/${itemId}`)).status, 200);
   const order = await request(`/api/hotels/${result.hotel.id}/orders`, {
     method: 'POST', token: ownerToken,
-    body: { payment_method: 'cash', items: [{ menu_item_id: ids.itemA, quantity: 1 }] },
+    body: { payment_method: 'cash', items: [{ menu_item_id: itemId, quantity: 1 }] },
   });
-  assert.equal(order.status, 403);
-  assert.equal((await order.json()).error.code, 'HOTEL_PENDING');
+  assert.equal(order.status, 201);
 
-  const approval = await request(`/api/platform/hotels/${result.hotel.id}/approve`, {
-    method: 'POST', token: tokens.platform, body: {},
-  });
-  assert.equal(approval.status, 200);
-  assert.equal((await approval.json()).data.status, 'active');
-  const visible = await request(`/api/hotels/${result.hotel.id}`);
-  assert.equal(visible.status, 200);
-
-  const another = await request('/api/hotels/register', {
+  const [[userCountBefore]] = await connection.execute('SELECT COUNT(*) AS total FROM users');
+  const existingCustomerRegistration = await request('/api/hotels/register', {
     method: 'POST', token: tokens.customer,
-    body: { hotel: { name: 'Phase 6c Rejected Hotel', phone: '9000000008' } },
+    body: { hotel: { name: 'Phase 6c Existing Customer Hotel', phone: '9000000008' } },
     headers: { 'x-forwarded-for': '198.51.100.2' },
   });
-  assert.equal(another.status, 201);
-  const rejectedHotel = (await another.json()).data.hotel;
-  const rejected = await request(`/api/platform/hotels/${rejectedHotel.id}/reject`, {
-    method: 'POST', token: tokens.platform, body: { reason: 'Please add a full address.' },
-  });
-  assert.equal(rejected.status, 200);
-  assert.equal((await rejected.json()).data.rejection_reason, 'Please add a full address.');
-  const hidden = await request(`/api/hotels/${rejectedHotel.id}`);
-  assert.equal(hidden.status, 404);
-  const resubmitted = await request(`/api/hotels/${rejectedHotel.id}/resubmit`, {
-    method: 'POST', token: tokens.customer, body: {},
-  });
-  assert.equal(resubmitted.status, 200);
-  assert.equal((await resubmitted.json()).data.status, 'pending');
-  const finalApproval = await request(`/api/platform/hotels/${rejectedHotel.id}/approve`, {
-    method: 'POST', token: tokens.platform, body: {},
-  });
-  assert.equal(finalApproval.status, 200);
+  assert.equal(existingCustomerRegistration.status, 201);
+  const existingResult = (await existingCustomerRegistration.json()).data;
+  assert.equal(existingResult.hotel.status, 'active');
+  assert.equal(existingResult.token, undefined);
+  const [[userCountAfter]] = await connection.execute('SELECT COUNT(*) AS total FROM users');
+  assert.equal(Number(userCountAfter.total), Number(userCountBefore.total));
+  const [membership] = await connection.execute(
+    'SELECT role FROM hotel_members WHERE user_id = ? AND hotel_id = ?', [ids.customer, existingResult.hotel.id],
+  );
+  assert.deepEqual(membership.map((row) => row.role), ['ADMIN']);
+  assert.equal((await request(`/api/hotels/${existingResult.hotel.id}`)).status, 200);
+  const myHotels = await request('/api/me/hotels', { token: tokens.customer });
+  assert.ok((await myHotels.json()).data.some((hotel) => hotel.hotel_id === existingResult.hotel.id && hotel.status === 'active'));
+
+  const platformMetrics = await request('/api/platform/metrics', { token: tokens.platform });
+  const metricData = (await platformMetrics.json()).data;
+  assert.ok(metricData.total_hotels >= 4);
+  assert.ok(metricData.active_hotels >= 3);
+  assert.equal(Object.hasOwn(metricData, 'pending_hotels'), false);
 });
 
-test('hotel registration rejects duplicate emails, slug collisions, and more than three pending applications', async () => {
+test('platform admins can explicitly activate legacy inactive hotels; owners cannot self-reactivate', async () => {
+  const [pendingInsert] = await connection.execute(
+    `INSERT INTO hotels (name, slug, status) VALUES ('Legacy Pending', 'legacy-pending', 'pending')`,
+  );
+  const [rejectedInsert] = await connection.execute(
+    `INSERT INTO hotels (name, slug, status, rejection_reason) VALUES ('Legacy Rejected', 'legacy-rejected', 'rejected', 'Old review')`,
+  );
+  await connection.execute('INSERT INTO hotel_members (user_id, hotel_id) VALUES (?, ?), (?, ?)', [
+    ids.customer, pendingInsert.insertId, ids.customer, rejectedInsert.insertId,
+  ]);
+  const metrics = await request('/api/platform/metrics', { token: tokens.platform });
+  const metricData = (await metrics.json()).data;
+  assert.equal(metricData.legacy_pending_hotels, 1);
+  assert.equal(metricData.legacy_rejected_hotels, 1);
+  for (const hotelId of [pendingInsert.insertId, rejectedInsert.insertId]) {
+    assert.equal((await request(`/api/hotels/${hotelId}`)).status, 404);
+    assert.equal((await request(`/api/hotels/${hotelId}/menu`)).status, 404);
+    assert.equal((await request(`/api/hotels/${hotelId}`, { token: tokens.customer })).status, 200);
+  }
+  const ownerAttempt = await request(`/api/platform/hotels/${pendingInsert.insertId}`, {
+    method: 'PATCH', token: tokens.customer, body: { status: 'active' },
+  });
+  assert.equal(ownerAttempt.status, 403);
+  const bodyAttempt = await request(`/api/hotels/${rejectedInsert.insertId}`, {
+    method: 'PATCH', token: tokens.customer, body: { status: 'active' },
+  });
+  assert.equal(bodyAttempt.status, 400);
+  const resubmitAttempt = await request(`/api/hotels/${rejectedInsert.insertId}/resubmit`, {
+    method: 'POST', token: tokens.customer, body: {},
+  });
+  assert.equal(resubmitAttempt.status, 404);
+
+  for (const hotelId of [pendingInsert.insertId, rejectedInsert.insertId]) {
+    const activated = await request(`/api/platform/hotels/${hotelId}`, {
+      method: 'PATCH', token: tokens.platform, body: { status: 'active' },
+    });
+    assert.equal(activated.status, 200);
+    assert.equal((await activated.json()).data.status, 'active');
+    assert.equal((await request(`/api/hotels/${hotelId}`)).status, 200);
+  }
+  const [remaining] = await connection.execute(
+    `SELECT status, COUNT(*) AS total FROM hotels WHERE id IN (?, ?) GROUP BY status`,
+    [pendingInsert.insertId, rejectedInsert.insertId],
+  );
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].status, 'active');
+  assert.equal(Number(remaining[0].total), 2);
+});
+
+test('registration keeps duplicate protections and no longer limits owners by pending application count', async () => {
   const duplicateEmail = await request('/api/hotels/register', {
     method: 'POST', body: {
       owner: { name: 'Duplicate', email: 'ADMIN-A@example.test', password: 'Partner-pass-0123' },
@@ -652,19 +725,18 @@ test('hotel registration rejects duplicate emails, slug collisions, and more tha
   assert.equal(collision.status, 409);
   assert.equal((await collision.json()).error.code, 'SLUG_IN_USE');
 
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < 4; i += 1) {
     const created = await request('/api/hotels/register', {
       method: 'POST', token: tokens.customer,
-      body: { hotel: { name: `Pending Limit Hotel ${i}`, phone: '9000000001' } },
-      headers: { 'x-forwarded-for': '198.51.100.10' },
+      body: { hotel: { name: `Unrestricted Active Hotel ${i}`, phone: '9000000001' } },
+      headers: { 'x-forwarded-for': `198.51.100.${10 + i}` },
     });
     assert.equal(created.status, 201);
+    assert.equal((await created.json()).data.hotel.status, 'active');
   }
-  const overLimit = await request('/api/hotels/register', {
-    method: 'POST', token: tokens.customer,
-    body: { hotel: { name: 'Pending Limit Hotel Four', phone: '9000000001' } },
-    headers: { 'x-forwarded-for': '198.51.100.10' },
+  const platformRegistration = await request('/api/hotels/register', {
+    method: 'POST', token: tokens.platform,
+    body: { hotel: { name: 'Platform Must Not Register as Owner', phone: '9000000001' } },
   });
-  assert.equal(overLimit.status, 409);
-  assert.equal((await overLimit.json()).error.code, 'HOTEL_LIMIT_REACHED');
+  assert.equal(platformRegistration.status, 403);
 });

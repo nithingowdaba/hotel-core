@@ -26,8 +26,22 @@ router.use(authenticate, requirePlatformAdmin);
  *       403: { description: Platform administrator access required }
  */
 router.get('/metrics', rejectUnknownQuery([]), validate, asyncHandler(async (req, res) => {
-  const [rows] = await dbQuery("SELECT COUNT(*) AS total FROM hotels WHERE status = 'pending'");
-  single(res, { ...metricsSnapshot(), pending_hotels: Number(rows[0].total) });
+  const [rows] = await dbQuery(
+    `SELECT COUNT(*) AS total_hotels,
+            SUM(status = 'active') AS active_hotels,
+            SUM(status = 'suspended') AS suspended_hotels,
+            SUM(status = 'pending') AS legacy_pending_hotels,
+            SUM(status = 'rejected') AS legacy_rejected_hotels
+     FROM hotels`,
+  );
+  single(res, {
+    ...metricsSnapshot(),
+    total_hotels: Number(rows[0].total_hotels || 0),
+    active_hotels: Number(rows[0].active_hotels || 0),
+    suspended_hotels: Number(rows[0].suspended_hotels || 0),
+    legacy_pending_hotels: Number(rows[0].legacy_pending_hotels || 0),
+    legacy_rejected_hotels: Number(rows[0].legacy_rejected_hotels || 0),
+  });
 }));
 const nullableText = (field, max) => body(field).optional({ nullable: true })
   .isString().isLength({ max });
@@ -152,74 +166,6 @@ router.get('/hotels', [
 }));
 
 /** @openapi
- * /api/platform/hotels/{hotelId}/approve:
- *   post:
- *     tags: [Hotels]
- *     summary: Approve a pending hotel registration
- *     responses:
- *       200: { description: Hotel approved }
- *       403: { description: Platform administrator access required }
- *       404: { description: Hotel not found }
- *       409: { description: Hotel is not pending }
- */
-router.post('/hotels/:hotelId/approve', [
-  positiveId('hotelId'), rejectUnknownQuery([]), rejectUnknownBody([]), validate,
-], asyncHandler(async (req, res) => {
-  const [result] = await dbQuery(
-    `UPDATE hotels SET status = 'active', rejection_reason = NULL,
-       approved_at = CURRENT_TIMESTAMP, approved_by = ?
-     WHERE id = ? AND status = 'pending'`, [req.user.id, req.params.hotelId],
-  );
-  if (!result.affectedRows) await ensureHotelTransition('pending', req.params.hotelId);
-  const [rows] = await dbQuery(
-    `SELECT id, name, slug, description, cuisines, address, phone, logo_url, cover_url,
-            accepting_orders, status, rejection_reason, submitted_at, approved_at, approved_by
-     FROM hotels WHERE id = ?`, [req.params.hotelId],
-  );
-  single(res, normalizeHotel(rows[0]));
-}));
-
-/** @openapi
- * /api/platform/hotels/{hotelId}/reject:
- *   post:
- *     tags: [Hotels]
- *     summary: Reject a pending hotel registration
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 500 } } }
- *     responses:
- *       200: { description: Hotel rejected }
- *       400: { description: Rejection reason is required }
- *       403: { description: Platform administrator access required }
- *       404: { description: Hotel not found }
- *       409: { description: Hotel is not pending }
- */
-router.post('/hotels/:hotelId/reject', [
-  positiveId('hotelId'), rejectUnknownQuery([]), rejectUnknownBody(['reason']),
-  body('reason').trim().isString().isLength({ min: 1, max: 500 }), validate,
-], asyncHandler(async (req, res) => {
-  const [result] = await dbQuery(
-    `UPDATE hotels SET status = 'rejected', rejection_reason = ?, approved_at = NULL, approved_by = NULL
-     WHERE id = ? AND status = 'pending'`, [req.body.reason, req.params.hotelId],
-  );
-  if (!result.affectedRows) await ensureHotelTransition('pending', req.params.hotelId);
-  const [rows] = await dbQuery(
-    `SELECT id, name, slug, description, cuisines, address, phone, logo_url, cover_url,
-            accepting_orders, status, rejection_reason, submitted_at, approved_at, approved_by
-     FROM hotels WHERE id = ?`, [req.params.hotelId],
-  );
-  single(res, normalizeHotel(rows[0]));
-}));
-
-async function ensureHotelTransition(expected, hotelId) {
-  const [rows] = await dbQuery('SELECT status FROM hotels WHERE id = ? LIMIT 1', [hotelId]);
-  if (!rows.length) throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
-  throw httpError(409, 'INVALID_HOTEL_TRANSITION', `Only ${expected} hotels can use this action.`);
-}
-
-/** @openapi
  * /api/platform/hotels/{hotelId}:
  *   patch:
  *     tags: [Hotels]
@@ -261,16 +207,23 @@ router.patch('/hotels/:hotelId', [
   body('status').optional().isIn(['active', 'suspended']), validate,
 ], asyncHandler(async (req, res) => {
   await ensureHotel(req.params.hotelId);
+  const [[current]] = await dbQuery('SELECT status FROM hotels WHERE id = ? LIMIT 1', [req.params.hotelId]);
   if (Object.hasOwn(req.body, 'status')) {
-    const [[current]] = await dbQuery('SELECT status FROM hotels WHERE id = ? LIMIT 1', [req.params.hotelId]);
-    if (!['active', 'suspended'].includes(current.status)) {
-      throw httpError(409, 'INVALID_HOTEL_TRANSITION', 'Pending and rejected hotels must use the approval workflow.');
+    if (!['active', 'suspended'].includes(current.status)
+      && !(req.body.status === 'active' && ['pending', 'rejected'].includes(current.status))) {
+      throw httpError(409, 'INVALID_HOTEL_TRANSITION', 'Legacy inactive hotels can only be explicitly activated by a platform administrator.');
     }
   }
   const keys = platformHotelFields.filter((field) => Object.hasOwn(req.body, field));
+  const resolvingLegacyHotel = Object.hasOwn(req.body, 'status')
+    && req.body.status === 'active' && ['pending', 'rejected'].includes(current.status);
+  const assignments = keys.map((field) => `\`${field}\` = ?`);
+  if (resolvingLegacyHotel) {
+    assignments.push('rejection_reason = NULL', 'submitted_at = NULL', 'approved_at = NULL', 'approved_by = NULL');
+  }
   try {
     await dbQuery(
-      `UPDATE hotels SET ${keys.map((field) => `\`${field}\` = ?`).join(', ')} WHERE id = ?`,
+      `UPDATE hotels SET ${assignments.join(', ')} WHERE id = ?`,
       [...keys.map((field) => req.body[field]), req.params.hotelId],
     );
   } catch (err) {

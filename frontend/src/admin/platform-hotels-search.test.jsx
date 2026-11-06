@@ -13,11 +13,14 @@ describe('platform hotel listing search', () => {
     useSession.getState().setSession('platform-token', { id: 1, role: 'PLATFORM_ADMIN' });
     vi.stubGlobal('fetch', vi.fn(async (url, options = {}) => {
       const parsed = new URL(String(url), 'http://hotel.test');
-      if (/\/api\/platform\/hotels\/\d+\/approve$/.test(parsed.pathname)) return result({ id: 22, name: 'Pending Hotel', status: 'active' });
+      if (/\/api\/platform\/hotels\/\d+$/.test(parsed.pathname) && options.method === 'PATCH') {
+        return result({ id: 22, name: 'Status Hotel', status: JSON.parse(options.body).status });
+      }
       if (parsed.pathname !== '/api/platform/hotels') throw new Error(`Unexpected request: ${url}`);
       const page = Number(parsed.searchParams.get('page'));
       const search = parsed.searchParams.get('search');
-      if (parsed.searchParams.get('status') === 'pending') return result([{ id: 22, name: 'Pending Hotel', slug: 'pending-hotel', status: 'pending', owner_name: 'Owner', owner_email: 'owner@example.test' }], { total: 1, totalPages: 1, page: 1 });
+      if (parsed.searchParams.get('status') === 'pending') return result([{ id: 22, name: 'Legacy Hotel', slug: 'legacy-hotel', status: 'pending' }], { total: 1, totalPages: 1, page: 1 });
+      if (parsed.searchParams.get('status') === 'suspended') return result([{ id: 22, name: 'Suspended Hotel', slug: 'suspended-hotel', status: 'suspended' }], { total: 1, totalPages: 1, page: 1 });
       if (!search && page === 1) return result(Array.from({ length: 20 }, (_, index) => ({ id: index + 1, name: `Hotel ${index + 1}`, slug: `hotel-${index + 1}`, status: 'active' })), { total: 21, totalPages: 2, page: 1 });
       if (!search && page === 2) return result([{ id: 21, name: 'Target Hotel', slug: 'target-hotel', status: 'active' }], { total: 21, totalPages: 2, page: 2 });
       if (search === 'Target Hotel' && page === 1) return result([{ id: 21, name: 'Target Hotel', slug: 'target-hotel', status: 'active' }], { total: 1, totalPages: 1, page: 1 });
@@ -61,16 +64,32 @@ describe('platform hotel listing search', () => {
     })).toBe(true));
   });
 
-  it('loads the server-filtered pending queue and approves a pending hotel', async () => {
+  it('searches the legacy status filter and requires explicit confirmation to activate a legacy hotel', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><MemoryRouter><PlatformHotels/></MemoryRouter></QueryClientProvider>);
     await screen.findAllByText('Hotel 1');
     fireEvent.change(screen.getByRole('combobox', { name: 'Hotel status filter' }), { target: { value: 'pending' } });
-    expect((await screen.findAllByText('Pending Hotel')).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText('owner@example.test')).length).toBeGreaterThan(0);
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Approve' }))[0]);
+    expect((await screen.findAllByText('Legacy Hotel')).length).toBeGreaterThan(0);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Activate legacy hotel' }))[0]);
+    expect(screen.getByRole('dialog', { name: 'Activate legacy hotel?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Activate hotel' }));
     await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) =>
-      /\/api\/platform\/hotels\/\d+\/approve$/.test(new URL(String(url), 'http://hotel.test').pathname)
-      && options.method === 'POST')).toBe(true));
+      /\/api\/platform\/hotels\/\d+$/.test(new URL(String(url), 'http://hotel.test').pathname)
+      && options.method === 'PATCH' && JSON.parse(options.body).status === 'active')).toBe(true));
+  });
+
+  it('confirms suspension and reactivation and displays the suspended state', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter><PlatformHotels/></MemoryRouter></QueryClientProvider>);
+    await screen.findAllByText('Hotel 1');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hotel status filter' }), { target: { value: 'suspended' } });
+    expect((await screen.findAllByText('Suspended Hotel')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('suspended').length).toBeGreaterThan(0);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Reactivate' }))[0]);
+    expect(screen.getByRole('dialog', { name: 'Reactivate this hotel?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reactivate hotel' }));
+    await waitFor(() => expect(global.fetch.mock.calls.some(([url, options]) =>
+      /\/api\/platform\/hotels\/\d+$/.test(new URL(String(url), 'http://hotel.test').pathname)
+      && options.method === 'PATCH' && JSON.parse(options.body).status === 'active')).toBe(true));
   });
 });

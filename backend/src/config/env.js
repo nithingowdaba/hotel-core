@@ -25,16 +25,10 @@ function positiveInteger(name, value) {
 const dbPort = positiveInteger('DB_PORT', process.env.DB_PORT);
 const dbPoolSize = positiveInteger('DB_POOL_SIZE', process.env.DB_POOL_SIZE || '10');
 const port = positiveInteger('PORT', process.env.PORT || '4000');
-const autoApproveHotels = process.env.AUTO_APPROVE_HOTELS || 'false';
-if (!['true', 'false'].includes(autoApproveHotels)) {
-  throw new Error('[env] AUTO_APPROVE_HOTELS must be true or false.');
-}
-
 module.exports = Object.freeze({
   nodeEnv: process.env.NODE_ENV || 'development',
   port,
   corsOrigin: process.env.CORS_ORIGIN || '',
-  autoApproveHotels: autoApproveHotels === 'true',
   db: Object.freeze({
     host: process.env.DB_HOST,
     port: dbPort,

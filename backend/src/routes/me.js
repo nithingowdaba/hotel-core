@@ -17,7 +17,7 @@ router.use(authenticate);
  *     tags: [Hotels]
  *     summary: List hotels administered by the current user
  *     responses:
- *       200: { description: Hotel memberships and onboarding status }
+ *       200: { description: Hotel memberships and current status }
  *       401: { description: Authentication required }
  */
 router.get('/hotels', rejectUnknownQuery([]), validate, asyncHandler(async (req, res) => {

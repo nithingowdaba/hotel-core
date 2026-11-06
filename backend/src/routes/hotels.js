@@ -4,7 +4,6 @@ const { Router } = require('express');
 const { body, query } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const { query: dbQuery, withTransaction } = require('../config/db');
-const env = require('../config/env');
 const { authenticate, optionalAuthenticate } = require('../middleware/auth');
 const { resolveHotel, requireHotelAdmin, requireVisibleHotel } = require('../middleware/tenant');
 const { hotelRegistrationLimiter } = require('../middleware/rateLimit');
@@ -59,8 +58,8 @@ function hotelSlug(name) {
  * /api/hotels/register:
  *   post:
  *     tags: [Hotels]
- *     summary: Register a hotel for platform approval
- *     description: Anonymous requests provide owner and hotel objects and receive a session token. Authenticated requests provide only the hotel object. Slug collisions return SLUG_IN_USE; AUTO_APPROVE_HOTELS=true activates self-registrations immediately.
+ *     summary: Register a hotel for immediate activation
+ *     description: Anonymous requests provide owner and hotel objects and receive a session token. Authenticated customer requests provide only the hotel object. New hotels are active immediately and visible publicly. Slug collisions return SLUG_IN_USE.
  *     security: []
  *     requestBody:
  *       required: true
@@ -93,7 +92,12 @@ function hotelSlug(name) {
  *       409: { description: EMAIL_IN_USE or SLUG_IN_USE }
  *       429: { description: Hotel registration rate limit reached }
  */
-router.post('/register', hotelRegistrationLimiter, optionalAuthenticate, [
+router.post('/register', hotelRegistrationLimiter, optionalAuthenticate, (req, res, next) => {
+  if (req.user && req.user.role !== 'CUSTOMER') {
+    return next(httpError(403, 'FORBIDDEN', 'Only customer accounts can register a hotel.'));
+  }
+  return next();
+}, [
   rejectUnknownQuery([]), registrationBodyRule(),
   body('owner.name').if((_value, { req }) => !req.user).trim().isString().isLength({ min: 1, max: 120 }),
   body('owner.email').if((_value, { req }) => !req.user).trim().isEmail().isLength({ max: 255 }),
@@ -117,8 +121,7 @@ router.post('/register', hotelRegistrationLimiter, optionalAuthenticate, [
   const name = hotel.name.trim();
   const slug = hotelSlug(name);
   if (!slug) throw httpError(400, 'VALIDATION_ERROR', 'Hotel name must contain letters or numbers.');
-  const autoApprove = env.autoApproveHotels;
-  const status = autoApprove ? 'active' : 'pending';
+  const status = 'active';
   const email = req.user ? null : req.body.owner.email.trim().toLowerCase();
   const userName = req.user ? null : req.body.owner.name.trim();
   const passwordHash = req.user ? null : await bcrypt.hash(req.body.owner.password, 12);
@@ -130,14 +133,6 @@ router.post('/register', hotelRegistrationLimiter, optionalAuthenticate, [
       if (req.user) {
         const [lockedUsers] = await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
         if (!lockedUsers.length) throw httpError(401, 'UNAUTHENTICATED', 'Authentication is required.');
-        const [[pendingCount]] = await connection.execute(
-          `SELECT COUNT(*) AS total FROM hotels h
-           JOIN hotel_members hm ON hm.hotel_id = h.id
-           WHERE hm.user_id = ? AND h.status = 'pending'`, [req.user.id],
-        );
-        if (Number(pendingCount.total) >= 3) {
-          throw httpError(409, 'HOTEL_LIMIT_REACHED', 'You may have up to three hotels awaiting approval.');
-        }
       } else {
         const [existingUsers] = await connection.execute(
           'SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [email],
@@ -158,12 +153,11 @@ router.post('/register', hotelRegistrationLimiter, optionalAuthenticate, [
       if (existingSlugs.length) throw httpError(409, 'SLUG_IN_USE', 'That hotel name is already registered.');
       const [hotelResult] = await connection.execute(
         `INSERT INTO hotels
-          (name, slug, description, cuisines, address, phone, cover_url, status, submitted_at, approved_at, approved_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, NULL)`,
+          (name, slug, description, cuisines, address, phone, cover_url, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [name, slug, hotel.description?.trim() || null,
           (hotel.cuisine ?? hotel.cuisines)?.trim() || null, hotel.address?.trim() || null,
-          hotel.phone.trim(), hotel.image_url?.trim() || null, status,
-          autoApprove ? new Date() : null],
+          hotel.phone.trim(), hotel.image_url?.trim() || null, status],
       );
       createdHotel = { id: Number(hotelResult.insertId), name, slug, description: hotel.description?.trim() || null,
         cuisines: (hotel.cuisine ?? hotel.cuisines)?.trim() || null, address: hotel.address?.trim() || null,
@@ -342,7 +336,7 @@ router.patch('/:hotelId', [
   validate, resolveHotel, requireHotelAdmin,
 ], asyncHandler(async (req, res) => {
   if (req.hotel.status !== 'active' && Object.hasOwn(req.body, 'accepting_orders')) {
-    throw httpError(409, 'HOTEL_NOT_ACTIVE', 'Order availability can only be changed after approval.');
+    throw httpError(409, 'HOTEL_NOT_ACTIVE', 'Order availability can only be changed for active hotels.');
   }
   const allowed = ['description', 'cuisines', 'address', 'phone', 'logo_url', 'cover_url', 'accepting_orders'];
   const fields = allowed.filter((field) => Object.hasOwn(req.body, field));
@@ -351,49 +345,6 @@ router.patch('/:hotelId', [
   const [rows] = await dbQuery(
     `SELECT ${hotelFields} FROM hotels WHERE id = ? LIMIT 1`, [req.hotel.id],
   );
-  single(res, normalizeHotel(rows[0]));
-}));
-
-/** @openapi
- * /api/hotels/{hotelId}/resubmit:
- *   post:
- *     tags: [Hotels]
- *     summary: Resubmit a rejected hotel for platform approval
- *     security: [{ bearerAuth: [] }]
- *     parameters:
- *       - in: path
- *         name: hotelId
- *         required: true
- *         schema: { type: integer, minimum: 1 }
- *     responses:
- *       200: { description: Hotel returned to pending review }
- *       403: { description: Hotel administrator access required }
- *       404: { description: Hotel not found }
- *       409: { description: Only rejected hotels can be resubmitted }
- */
-router.post('/:hotelId/resubmit', [
-  authenticate, positiveId('hotelId'), rejectUnknownQuery([]), rejectUnknownBody([]), validate,
-  resolveHotel, requireHotelAdmin,
-], asyncHandler(async (req, res) => {
-  await withTransaction(async (connection) => {
-    await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
-    const [[pendingCount]] = await connection.execute(
-      `SELECT COUNT(*) AS total FROM hotels h JOIN hotel_members hm ON hm.hotel_id = h.id
-       WHERE hm.user_id = ? AND h.status = 'pending'`, [req.user.id],
-    );
-    if (Number(pendingCount.total) >= 3) {
-      throw httpError(409, 'HOTEL_LIMIT_REACHED', 'You may have up to three hotels awaiting approval.');
-    }
-    const [result] = await connection.execute(
-      `UPDATE hotels SET status = 'pending', rejection_reason = NULL,
-         submitted_at = CURRENT_TIMESTAMP, approved_at = NULL, approved_by = NULL
-       WHERE id = ? AND status = 'rejected'`, [req.hotel.id],
-    );
-    if (!result.affectedRows) {
-      throw httpError(409, 'INVALID_HOTEL_TRANSITION', 'Only rejected hotels can be resubmitted.');
-    }
-  });
-  const [rows] = await dbQuery(`SELECT ${hotelFields} FROM hotels WHERE id = ?`, [req.hotel.id]);
   single(res, normalizeHotel(rows[0]));
 }));
 

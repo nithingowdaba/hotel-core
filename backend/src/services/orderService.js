@@ -9,8 +9,8 @@ function money(value) {
 }
 
 async function createOrder({ hotel, user, items, paymentMethod }) {
-  if (hotel.status === 'pending') throw httpError(403, 'HOTEL_PENDING', 'This hotel is awaiting platform approval.');
-  if (hotel.status === 'rejected') throw httpError(403, 'HOTEL_REJECTED', 'This hotel is not approved for orders.');
+  if (hotel.status === 'pending') throw httpError(403, 'HOTEL_PENDING', 'This legacy hotel is not active.');
+  if (hotel.status === 'rejected') throw httpError(403, 'HOTEL_REJECTED', 'This legacy hotel is not active.');
   if (hotel.status !== 'active') throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
   if (!hotel.accepting_orders) throw httpError(409, 'HOTEL_CLOSED', 'This hotel is not accepting orders.');
   const quantities = new Map();
@@ -20,6 +20,17 @@ async function createOrder({ hotel, user, items, paymentMethod }) {
   }
   const ids = [...quantities.keys()];
   return withTransaction(async (connection) => {
+    const [[currentHotel]] = await connection.execute(
+      'SELECT status, accepting_orders FROM hotels WHERE id = ? FOR UPDATE', [hotel.id],
+    );
+    if (!currentHotel || currentHotel.status === 'suspended') {
+      throw httpError(403, 'HOTEL_SUSPENDED', 'This hotel is suspended.');
+    }
+    if (currentHotel.status === 'pending') throw httpError(403, 'HOTEL_PENDING', 'This legacy hotel is not active.');
+    if (currentHotel.status === 'rejected') throw httpError(403, 'HOTEL_REJECTED', 'This legacy hotel is not active.');
+    if (currentHotel.status !== 'active') throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
+    if (!currentHotel.accepting_orders) throw httpError(409, 'HOTEL_CLOSED', 'This hotel is not accepting orders.');
+
     const [rows] = await connection.execute(
       `SELECT id, name, price, is_available FROM menu_items
        WHERE hotel_id = ? AND id IN (${ids.map(() => '?').join(', ')})`, [hotel.id, ...ids],

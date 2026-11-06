@@ -12,7 +12,11 @@ npm test
 ```
 
 Copy `backend/.env.example` to `backend/.env` and set local configuration before starting the backend.
-Development uses the copied `backend/.env` with `DB_NAME=hotel_core_dev`. Keep `AUTO_APPROVE_HOTELS=false` for platform review; setting it to `true` explicitly activates new hotel registrations immediately.
+Hotel owners can register without platform-admin approval. Anonymous registrations create the owner account and hotel membership; authenticated customer registrations reuse the existing customer account. New hotels become active and publicly discoverable immediately. Platform administrators retain the ability to suspend and reactivate any hotel. No approval configuration is required.
+
+Hotel cover and logo images are optional. A shared, locally bundled Hotel Core storefront illustration is shown when no image is configured or an optional image fails to load. No image upload or external image service is required.
+
+Historical `pending` and `rejected` records remain in the database but stay hidden from public listings and direct public access. A platform administrator can explicitly activate an individual legacy hotel from the platform hotel list or detail page. Owners cannot resubmit or activate these records themselves. Suspended hotels are also hidden publicly and all backend writes and new orders are rejected until a platform administrator reactivates them.
 
 ## Database setup
 

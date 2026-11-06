@@ -42,7 +42,7 @@ Rules:
 1. A hotel admin is also a normal user (`role = 'CUSTOMER'` plus membership rows). A user may administer several hotels if the platform admin links them.
 2. Customers are **never** tied to a hotel. Only hotel admins have hotel links.
 3. `PLATFORM_ADMIN` accounts are created only by CLI script, never through any API.
-4. Hotel owners can self-register a hotel for platform approval. New hotels are pending by default; platform admins approve or reject them. `AUTO_APPROVE_HOTELS=true` is an explicit deployment override.
+4. Hotel owners can self-register a hotel and it becomes active immediately. Platform administrators can suspend and reactivate any hotel.
 
 ### 1.2 In scope (v1)
 - Multi-tenancy (tables, middleware, migration of existing data)
@@ -55,7 +55,7 @@ Rules:
 - Minimal observability: structured request logs and an in-memory metrics endpoint
 - Deployment to GCP (single VM, Docker Compose, nginx), backups
 - Hotel profile (description, cuisines, images, open/closed switch)
-- Hotel self-registration and platform approval (§5.3, §5.7)
+- Immediate hotel self-registration and platform suspension controls (§5.3, §5.7)
 - **UI: consumer-grade, Swiggy/Blinkit-style app (§14):** hotel discovery → hotel menu → cart → checkout → orders; hotel admin panel; platform admin panel
 
 ### 1.3 Out of scope (do NOT build)
@@ -127,7 +127,7 @@ Split the current 243-line `routes/index.js` into the route modules above. Behav
 ### 3.2 Tenant-safety rules (the most important section)
 1. **Hotel comes only from the URL** (`/api/hotels/:hotelId/...`). Never read `hotel_id` from a request body or query to decide tenancy.
 2. Every query on `menu_items`, `orders`, `order_items` includes `hotel_id = ?` (`WHERE id = ? AND hotel_id = ?` for single-row access). No exceptions.
-3. `resolveHotel` loads the hotel; suspended hotels reject writes (`403 HOTEL_SUSPENDED`) and are hidden from public lists. Unknown hotel → `404 HOTEL_NOT_FOUND`.
+3. `resolveHotel` loads the hotel; suspended hotels reject writes (`403 HOTEL_SUSPENDED`) and are hidden from public lists and direct public requests. Hotel members may read their suspended hotel in the admin workspace; only platform administrators can change its status. Pending/rejected statuses are retained only for historical rows and are never public.
 4. `requireHotelAdmin` passes if `users.role = 'PLATFORM_ADMIN'` **or** a `hotel_members` row exists for (user, hotel). Otherwise `403 FORBIDDEN`.
 5. Accessing another user's order returns `404 ORDER_NOT_FOUND` (not 403) to avoid leaking existence.
 6. The database also enforces tenancy with composite foreign keys (§4) so a bug cannot attach a hotel-A order item to a hotel-B menu item.
@@ -264,7 +264,7 @@ Manual, idempotent where possible, uses `INFORMATION_SCHEMA` checks (this MySQL 
 9. Print before/after row counts.
 
 ### 4.1.2 Hotel onboarding migration (`backend/database/migrations/002-hotel-onboarding.sql`)
-The idempotent follow-up migration adds `pending` and `rejected` statuses plus rejection/submission/approval metadata. It preserves existing active and suspended statuses and is run by `npm run migrate`; it does not run on server startup.
+The idempotent follow-up migration added `pending` and `rejected` statuses plus metadata for records created by the former approval workflow. Those enum values remain for backward compatibility. New registrations always use `active`; no migration is needed to change this policy. Historical pending/rejected rows remain private until a platform administrator explicitly sets their status to `active`.
 
 ### 4.2 Seed (`backend/database/seed.sql`, dev/demo only)
 Hotels `udupi-hotel` and `divum-vendor`, each with 8–12 menu items across 3–4 categories, with veg/non-veg flags and placeholder `image_url`s (files in `public/img/`), plus cuisines and cover/logo on each hotel. Platform admin is created by script, never by seed.
@@ -290,7 +290,7 @@ Legend: **Public** = no token. **Auth** = any logged-in active user. **HA** = ho
 | `POST /auth/register` | Public, rate-limited | `{full_name, email, phone, password(8–72)}` → creates `CUSTOMER`. Any submitted role is ignored. 409 `EMAIL_IN_USE` |
 | `POST /auth/login` | Public, rate-limited | `{email, password}` → `{token, user}`. Same error for unknown email and wrong password. Inactive user → 401 |
 | `GET /auth/me` | Auth | Returns user (no hash) plus `admin_of: [{hotel_id, name, slug}]` |
-| `GET /me/hotels` | Auth | Lists the user's hotel memberships and each hotel's approval status/rejection reason |
+| `GET /me/hotels` | Auth | Lists the user's hotel memberships and each hotel's status; pending/rejected are legacy inactive states |
 
 JWT: `sub` = user id, `iss` = `hotel-core`, expiry 1h, secret ≥ 32 chars from env.
 
@@ -298,12 +298,11 @@ JWT: `sub` = user id, `iss` = `hotel-core`, expiry 1h, secret ≥ 32 chars from 
 | Method & path | Access | Notes |
 |---|---|---|
 | `GET /hotels` | Public | Active hotels only. Query: `search` (name/cuisines), `page`, `limit`. Fields: id, name, slug, description, cuisines, address, logo_url, cover_url, accepting_orders |
-| `POST /hotels/register` | Public or Auth | Anonymous body `{owner:{name,email,password},hotel:{name,phone,...}}`; authenticated body `{hotel:{name,phone,...}}`. Creates a pending hotel and ADMIN membership; anonymous response includes token/user. Email must be new; slug collisions return 409 `SLUG_IN_USE`. Maximum three pending hotels per owner. `AUTO_APPROVE_HOTELS=true` opts into immediate activation. |
-| `GET /hotels/:hotelId` | Public or owning Auth/PA | Active hotel is public; pending/rejected profile is visible only to its authenticated member or a platform admin |
+| `POST /hotels/register` | Public or Auth customer | Anonymous body `{owner:{name,email,password},hotel:{name,phone,...}}`; authenticated customer body `{hotel:{name,phone,...}}`. Creates an active hotel and ADMIN membership immediately; anonymous response includes token/user. Email must be new; slug collisions return 409 `SLUG_IN_USE`. Registration is rate-limited; there is no pending-application cap. |
+| `GET /hotels/:hotelId` | Public or owning Auth/PA | Active hotel is public; suspended hotel is visible only to its member or a platform admin; pending/rejected profiles are legacy and visible only to their member or a platform admin |
 | `GET /hotels/:hotelId/menu` | Public | **Grouped menu for the UI:** `{ categories: [{ name, items: [...] }] }`, all of the hotel's items in one query (cap 500), ordered by category then name. Query `veg=true` for veg only. Unavailable items are included with `is_available:false` |
 | `GET /hotels/:hotelId/menu-items` | Public | Query: `search`, `category`, `available`, `veg`, `page`, `limit`. Default customers' view: `available` unfiltered, UI hides unavailable |
 | `GET /hotels/:hotelId/menu-items/:id` | Public | Must match hotel |
-| `POST /hotels/:hotelId/resubmit` | HA | Rejected hotel only; clears rejection reason and returns it to pending review |
 
 ### 5.4 Hotel admin: menu
 | Method & path | Access | Body |
@@ -313,7 +312,7 @@ JWT: `sub` = user id, `iss` = `hotel-core`, expiry 1h, secret ≥ 32 chars from 
 | `PATCH /hotels/:hotelId/menu-items/:id/availability` | HA | `{is_available: boolean}` |
 | `PATCH /hotels/:hotelId` | HA | **Limited profile edit:** description, cuisines, address, phone, logo_url, cover_url, `accepting_orders`. (name, slug, status are PA-only.) |
 
-Image/logo/cover URLs must be `https://` (validated, max 500). There is no delete endpoint. Use availability. Price changes apply to new orders only.
+Image/logo/cover URLs are optional; configured URLs must be `https://` (validated, max 500). Hotel cover/logo views use the local branded storefront placeholder when no image exists or an optional image fails. There is no upload or image-storage service. There is no delete endpoint for menu rows; use availability. Price changes apply to new orders only.
 
 ### 5.5 Orders
 | Method & path | Access | Notes |
@@ -339,16 +338,14 @@ Only `status='completed' AND cancelled_at IS NULL`. Date filters use half-open r
 |---|---|
 | `POST /platform/hotels` | `{name, slug?, description?, cuisines?, address?, phone?}` → slug auto-generated from name if absent; 409 on duplicate slug |
 | `GET /platform/hotels` | All statuses, pagination; optional `status` filter |
-| `PATCH /platform/hotels/:hotelId` | name, description, cuisines, address, phone, logo_url, cover_url, `status` (`active|suspended`) |
-| `POST /platform/hotels/:hotelId/approve` | Pending only; records approver/time and activates the hotel |
-| `POST /platform/hotels/:hotelId/reject` | Pending only; requires a 1–500 character `reason` |
+| `PATCH /platform/hotels/:hotelId` | name, description, cuisines, address, phone, logo_url, cover_url, `status` (`active|suspended`). Only platform admins can suspend/reactivate; pending/rejected legacy rows can only be explicitly activated here. |
 | `GET /platform/hotels/:hotelId/admins` | List admins of hotel |
 | `POST /platform/hotels/:hotelId/admins` | Exactly one mode: `{user_id}` or `{email}` (link an existing active `CUSTOMER`; email lookup is case-insensitive; platform admins and inactive users are ineligible; neither/both selectors are rejected; ineligible or unknown email returns generic 404 `USER_NOT_FOUND`) **or** `{full_name, email, phone, password}` (create user + link, in one transaction). Duplicate link returns 409 |
 | `DELETE /platform/hotels/:hotelId/admins/:userId` | Remove link only; the user account stays |
-| `GET /platform/metrics` | In-memory request metrics (§8) |
+| `GET /platform/metrics` | In-memory request metrics plus total, active, suspended and legacy pending/rejected hotel counts (§8) |
 
 ### 5.8 Error codes (additions)
-`HOTEL_NOT_FOUND` 404, `HOTEL_SUSPENDED` 403, `HOTEL_PENDING` 403, `HOTEL_REJECTED` 403, `HOTEL_LIMIT_REACHED` 409, `INVALID_HOTEL_TRANSITION` 409, `MENU_ITEM_NOT_FOUND` 404, `INVALID_MENU_ITEM` 400, `ITEM_UNAVAILABLE` 409, `MENU_ITEM_EXISTS` 409, `ALREADY_HOTEL_ADMIN` 409, `SLUG_IN_USE` 409, `HOTEL_CLOSED` 409, plus existing ones.
+`HOTEL_NOT_FOUND` 404, `HOTEL_SUSPENDED` 403, legacy inactive order errors 403, `INVALID_HOTEL_TRANSITION` 409, `MENU_ITEM_NOT_FOUND` 404, `INVALID_MENU_ITEM` 400, `ITEM_UNAVAILABLE` 409, `MENU_ITEM_EXISTS` 409, `ALREADY_HOTEL_ADMIN` 409, `SLUG_IN_USE` 409, `HOTEL_CLOSED` 409, plus existing ones.
 
 ---
 
@@ -443,7 +440,7 @@ Mandatory **tenant isolation matrix**: create hotels A and B, admin A, admin B, 
 - Admin A cannot reach an A-order id through B's URL (and vice versa) → 404.
 - Order at hotel A with a menu item belonging to B → 400 `INVALID_MENU_ITEM`.
 - Customer C can order at A and B, sees both in `/me/orders`, cannot see others' orders (404), cannot use any admin endpoint (403).
-- Suspended hotel: hidden from `GET /hotels`, rejects orders (403), admin reads still work for PA. `accepting_orders=false` → 409 `HOTEL_CLOSED`.
+- Suspended hotel: hidden from public hotel listing/search and direct requests, rejects writes and orders (403). Its members can read the suspended status in their admin workspace; only PA can reactivate it. `accepting_orders=false` → 409 `HOTEL_CLOSED`.
 - Grouped menu returns only that hotel's items; a hotel admin cannot edit another hotel's profile (403).
 - Price change after ordering does not alter existing order items.
 - Cancelling/completing rules (pending → completed once; cancelled cannot complete; completed cannot cancel).
@@ -595,22 +592,21 @@ Layout: left sidebar on desktop, top tabs on mobile. Hotel switcher in the heade
 - **Settings:** accepting-orders toggle (Open/Closed), description, cuisines, address, phone, logo/cover URLs with preview.
 
 ### 14.6 Platform admin panel (`/platform/...`)
-- **Hotels:** table (name, slug, status chip, admins count, created), search, status filter and pending approval count, **Create hotel** modal (name, cuisines, address, phone), Suspend/Activate action with confirmation. Pending applications can be approved or rejected with a reason.
+- **Hotels:** table (image, name, slug, status chip, admins count, created), search and status filter, **Create hotel** modal (name, cuisines, address, phone), Suspend/Reactivate action with confirmation. Legacy pending/rejected records are labeled as legacy and require explicit platform-admin activation.
 - **Hotel detail:** admins list; **Add admin** (link an existing active customer by user ID or case-insensitive email, **or** create new), remove admin with confirmation.
-- **Metrics:** table from `/platform/metrics` (route, count, errors, p50/p95/max), refresh button.
+- **Metrics:** total, active, suspended and legacy inactive hotel counts, followed by `/platform/metrics` route counts and latency, refresh button.
 
 ### 14.6.1 Hotel partner onboarding
-- `/partner` accepts anonymous owner/account and hotel details or hotel details from an authenticated account. New hotels appear in the owner's Account under **My hotels**.
-- Pending hotels allow profile editing but cannot receive orders. Hotel admin navigation hides Live orders and shows a persistent pending banner.
-- Rejected hotels show the platform reason, allow profile edits, and can be resubmitted. Resubmission returns the hotel to pending review.
-- The platform hotels view exposes a pending approval queue; approval activates public listing/orders and rejection stores the reason. Platform metrics include pending hotel count.
+- `/partner` accepts anonymous owner/account and hotel details or hotel details from an authenticated customer account. New hotels are active immediately, publicly discoverable, and appear in the owner's Account under **My hotels**.
+- Platform administrators can suspend and reactivate active hotels. Suspended hotels are hidden from public listings and direct public requests, and backend routes reject their writes and new orders. Owners see a suspended banner in their admin workspace; only platform administrators can reactivate them.
+- Historical pending/rejected records remain private and are labeled as legacy inactive records. Only a platform administrator can explicitly activate them; owners cannot resubmit or self-activate them.
 
 ### 14.7 States & feedback
 - **Loading:** skeleton cards/rows matching final layout (no full-page spinners).
 - **Empty:** friendly illustration-free message + action (e.g. "No hotels yet", "Your cart is empty — Browse hotels").
 - **Error:** inline error panel with **Retry**; network offline → persistent toast "You're offline".
 - **Success/errors from actions:** toasts (3 s), form errors inline.
-- **Images:** `loading="lazy"`, explicit `width`/`height` (no layout shift), inline SVG placeholder on `onerror`.
+- **Images:** hotel photos are optional. A shared local branded storefront SVG appears when no hotel image is configured or a remote image fails. Image elements reserve explicit dimensions; no external placeholder service or upload is required.
 
 ### 14.8 Frontend architecture and bundle budget
 The application source lives in `frontend/src/`, with customer routes under `pages/`, administrative routes under `admin/`, and shared components, API clients, and state under their respective directories. Vite produces the static production application in `frontend/dist/`.

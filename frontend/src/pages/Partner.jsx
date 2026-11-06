@@ -49,12 +49,12 @@ export default function Partner() {
   return <main className="page partner-page">
     <Link to="/" className="back-link">← Back to Hotel Core</Link>
     <p className="eyebrow">HOTEL PARTNERS</p><h1>Bring your hotel to Hotel Core</h1>
-    <p className="muted">Submit your hotel for platform review. You can prepare your profile while it is pending approval.</p>
+    <p className="muted">Register your hotel and start managing its menu and profile right away.</p>
     <form className="partner-form" onSubmit={onSubmit} noValidate>
       {!token && <section><h2>Account</h2><Field label="Owner name" name="ownerName" value={form.ownerName} onChange={update} required autoComplete="name"/><Field label="Email" name="email" type="email" value={form.email} onChange={update} required autoComplete="email"/><Field label="Password" name="password" type="password" value={form.password} onChange={update} required minLength={8} maxLength={72} autoComplete="new-password"/></section>}
       <section><h2>Hotel details</h2><Field label="Hotel name" name="name" value={form.name} onChange={update} required maxLength={120}/><Field label="Phone" name="phone" type="tel" value={form.phone} onChange={update} required maxLength={20}/><Field label="Address" name="address" value={form.address} onChange={update} maxLength={255}/><Field label="Cuisine" name="cuisines" value={form.cuisines} onChange={update} maxLength={160}/><label className="field-label">Description<textarea name="description" value={form.description} onChange={update} maxLength={10000}/></label><Field label="Cover image URL (HTTPS)" name="image_url" type="url" value={form.image_url} onChange={update}/></section>
       {error && <p role="alert" className="form-error">{error}</p>}
-      <LoadingButton className="button-primary" pending={submit.isPending}>{submit.isPending ? 'Submitting…' : 'Submit hotel for review'}</LoadingButton>
+      <LoadingButton className="button-primary" pending={submit.isPending}>{submit.isPending ? 'Creating hotel…' : 'Register hotel'}</LoadingButton>
       {!token && <p className="muted">Already have an account? <Link to="/login">Log in</Link> before submitting your hotel.</p>}
     </form>
   </main>;
