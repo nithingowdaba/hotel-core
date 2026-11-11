@@ -500,21 +500,43 @@ test('platform hotel search spans all records and keeps filtered pagination tota
 });
 
 test('orders, customer history, hotel transitions, reports, and metrics enforce scope', async () => {
+  const savedAddressResponse = await request('/api/me/addresses', {
+    method: 'POST',
+    token: tokens.customer,
+    body: { label: 'Home', address: '12 Test Lane, Bengaluru' },
+  });
+  assert.equal(savedAddressResponse.status, 201);
+  const savedAddress = (await savedAddressResponse.json()).data;
+
+  const foreignAddressOrder = await request(`/api/hotels/${ids.hotelA}/orders`, {
+    method: 'POST',
+    token: tokens.adminA,
+    body: {
+      payment_method: 'cash',
+      address_id: savedAddress.id,
+      items: [{ menu_item_id: ids.itemA, quantity: 1 }],
+    },
+  });
+  assert.equal(foreignAddressOrder.status, 400);
+
   const created = await request(`/api/hotels/${ids.hotelA}/orders`, {
     method: 'POST', token: tokens.customer,
-    body: { payment_method: 'upi', items: [
+    body: { payment_method: 'upi', address_id: savedAddress.id, items: [
       { menu_item_id: ids.itemA, quantity: 2 }, { menu_item_id: ids.itemA, quantity: 1 },
     ] },
   });
   assert.equal(created.status, 201);
   const order = (await created.json()).data;
   assert.equal(order.total_amount, '150.00');
+  assert.equal(order.delivery_address, '12 Test Lane, Bengaluru');
   assert.equal(order.items.length, 1);
   assert.equal(order.items[0].quantity, 3);
 
   const own = await request('/api/me/orders', { token: tokens.customer });
   assert.equal(own.status, 200);
   assert.ok((await own.json()).data.some((item) => item.id === order.id));
+  const hotelDetail = await request(`/api/hotels/${ids.hotelA}/orders/${order.id}`, { token: tokens.adminA });
+  assert.equal((await hotelDetail.json()).data.delivery_address, '12 Test Lane, Bengaluru');
 
   await connection.execute(
     `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount)

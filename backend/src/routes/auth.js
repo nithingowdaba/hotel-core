@@ -215,6 +215,7 @@ router.post('/login', authLimiter, [
  *                         full_name: { type: string }
  *                         email: { type: string, format: email }
  *                         phone: { type: string }
+ *                         address: { type: string, nullable: true }
  *                         role: { type: string }
  *                         admin_of:
  *                           type: array

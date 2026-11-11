@@ -20,7 +20,7 @@ const authenticate = asyncHandler(async (req, res, next) => {
   }
 
   const [rows] = await query(
-    `SELECT id, full_name, email, phone, role, is_active
+    `SELECT id, full_name, email, phone, address, role, is_active
      FROM users WHERE id = ? LIMIT 1`,
     [payload.sub],
   );

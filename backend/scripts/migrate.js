@@ -191,6 +191,30 @@ async function runOnboardingMigration(connection) {
   }
 }
 
+async function runCustomerProfileFeedbackMigration(connection) {
+  const migrationPath = path.resolve(__dirname, '..', 'database', 'migrations', '003-customer-profile-feedback.sql');
+  const migrationSql = await fs.readFile(migrationPath, 'utf8');
+  const procedure = 'migrate_003_customer_profile_feedback';
+  try {
+    await connection.query(migrationSql);
+    await connection.query(`CALL ${procedure}()`);
+  } finally {
+    await connection.query(`DROP PROCEDURE IF EXISTS ${procedure}`);
+  }
+}
+
+async function runCustomerAddressBookMigration(connection) {
+  const migrationPath = path.resolve(__dirname, '..', 'database', 'migrations', '004-customer-address-book.sql');
+  const migrationSql = await fs.readFile(migrationPath, 'utf8');
+  const procedure = 'migrate_004_customer_address_book';
+  try {
+    await connection.query(migrationSql);
+    await connection.query(`CALL ${procedure}()`);
+  } finally {
+    await connection.query(`DROP PROCEDURE IF EXISTS ${procedure}`);
+  }
+}
+
 async function main() {
   const database = databaseFromArgs();
   const connection = await mysql.createConnection(connectionOptions({ database, multipleStatements: true }));
@@ -202,6 +226,8 @@ async function main() {
       await runMigration(connection);
     }
     await runOnboardingMigration(connection);
+    await runCustomerProfileFeedbackMigration(connection);
+    await runCustomerAddressBookMigration(connection);
     console.log('Migration complete.');
   } finally {
     await connection.end();
@@ -215,4 +241,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runMigration, runOnboardingMigration, multiTenantSchemaExists };
+module.exports = {
+  runMigration,
+  runOnboardingMigration,
+  runCustomerProfileFeedbackMigration,
+  runCustomerAddressBookMigration,
+  multiTenantSchemaExists,
+};

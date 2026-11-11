@@ -8,7 +8,7 @@ function money(value) {
   return paiseToRupees(rupeesToPaise(String(value)));
 }
 
-async function createOrder({ hotel, user, items, paymentMethod }) {
+async function createOrder({ hotel, user, items, paymentMethod, addressId }) {
   if (hotel.status === 'pending') throw httpError(403, 'HOTEL_PENDING', 'This legacy hotel is not active.');
   if (hotel.status === 'rejected') throw httpError(403, 'HOTEL_REJECTED', 'This legacy hotel is not active.');
   if (hotel.status !== 'active') throw httpError(404, 'HOTEL_NOT_FOUND', 'Hotel not found.');
@@ -20,6 +20,17 @@ async function createOrder({ hotel, user, items, paymentMethod }) {
   }
   const ids = [...quantities.keys()];
   return withTransaction(async (connection) => {
+    let deliveryAddress = null;
+    if (addressId !== undefined) {
+      const [addressRows] = await connection.execute(
+        'SELECT address FROM customer_addresses WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
+        [addressId, user.id],
+      );
+      if (!addressRows.length) {
+        throw httpError(400, 'INVALID_ADDRESS', 'Choose one of your saved delivery addresses.');
+      }
+      deliveryAddress = addressRows[0].address;
+    }
     const [[currentHotel]] = await connection.execute(
       'SELECT status, accepting_orders FROM hotels WHERE id = ? FOR UPDATE', [hotel.id],
     );
@@ -51,9 +62,9 @@ async function createOrder({ hotel, user, items, paymentMethod }) {
     const totalPaise = orderItems.reduce((sum, item) => sum + item.subtotalPaise, 0);
     if (totalPaise > 9999999999) throw httpError(400, 'VALIDATION_ERROR', 'Order total is too large.');
     const [insert] = await connection.execute(
-      `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [hotel.id, user.id, user.full_name, user.phone, paymentMethod, paiseToRupees(totalPaise)],
+      `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, delivery_address, total_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [hotel.id, user.id, user.full_name, user.phone, paymentMethod, deliveryAddress, paiseToRupees(totalPaise)],
     );
     const values = [];
     const valueSets = orderItems.map((item) => {
@@ -67,6 +78,7 @@ async function createOrder({ hotel, user, items, paymentMethod }) {
     return {
       id: Number(insert.insertId), hotel_id: Number(hotel.id), user_id: Number(user.id),
       customer_name: user.full_name, phone: user.phone, payment_method: paymentMethod,
+      delivery_address: deliveryAddress,
       total_amount: paiseToRupees(totalPaise), status: 'pending', cancelled_at: null,
       created_at: new Date().toISOString(), items: orderItems.map(({ subtotalPaise, ...item }) => item),
     };

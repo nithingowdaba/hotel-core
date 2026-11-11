@@ -6,11 +6,13 @@ import { MemoryRouter, Outlet, Route, Routes } from 'react-router-dom';
 import { useSession } from '../store/session.js';
 import { AdminGuard, HotelGuard, PlatformGuard } from '../routes.jsx';
 import AdminOrders from './Orders.jsx';
+import { adminKeys } from './api.js';
 import { NoticeProvider } from './components.jsx';
 
 function renderWithRouter(tree, initialEntries = ['/']) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={initialEntries}>{tree}</MemoryRouter></QueryClientProvider>);
+  const view = render(<QueryClientProvider client={client}><MemoryRouter initialEntries={initialEntries}>{tree}</MemoryRouter></QueryClientProvider>);
+  return { ...view, client };
 }
 const ok = (data) => Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data }) });
 function OrdersFrame() { return <Outlet context={{ hotelId: '4', hotel: { id: 4, name: 'Cafe' }, suspended: false }} />; }
@@ -36,14 +38,44 @@ describe('admin routes and order flow', () => {
     global.fetch = vi.fn((url, options = {}) => {
       if (String(url).includes('/auth/me')) return ok({ role: 'HOTEL_ADMIN' });
       if (String(url).includes('/status')) return ok({ id: 21, status: 'completed' });
-      if (String(url).includes('/orders?')) return ok({ items: [{ id: 21, status: 'pending', created_at: '2026-11-05T10:00:00Z', customer_name: 'Sam', total_amount: '25.00' }], meta: { total: 1, totalPages: 1 } });
+      if (String(url).includes('/orders?')) return ok({ items: [{ id: 21, status: 'pending', created_at: new Date().toISOString(), customer_name: 'Sam', total_amount: '25.00' }], meta: { total: 1, totalPages: 1 } });
       throw new Error(`Unexpected request: ${url} ${options.method || 'GET'}`);
     });
     renderWithRouter(<NoticeProvider><Routes><Route path="/" element={<OrdersFrame />}><Route index element={<AdminOrders />} /></Route></Routes></NoticeProvider>);
     expect(await screen.findByRole('heading', { name: 'Order #21' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Order age')).toHaveTextContent('Just now');
+    expect(screen.getByRole('status')).toHaveTextContent('1 pending order');
     fireEvent.click(screen.getByRole('button', { name: 'Mark completed' }));
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/hotels/4/orders/21/status', expect.objectContaining({ method: 'PATCH' })));
     expect(await screen.findByText('Order marked completed.')).toBeInTheDocument();
+  });
+
+  it('keeps new order badges visible while pending orders refresh', async () => {
+    useSession.getState().setSession('token', { id: 1 });
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes('/auth/me')) return ok({ role: 'HOTEL_ADMIN' });
+      if (String(url).includes('/orders?')) return ok({
+        items: [{ id: 21, status: 'pending', created_at: new Date().toISOString(), customer_name: 'Sam', total_amount: '25.00' }],
+        meta: { total: 1, totalPages: 1 },
+      });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const { client } = renderWithRouter(<NoticeProvider><Routes><Route path="/" element={<OrdersFrame />}><Route index element={<AdminOrders />} /></Route></Routes></NoticeProvider>);
+    expect(await screen.findByRole('heading', { name: 'Order #21' })).toBeInTheDocument();
+
+    const refreshedOrders = {
+      items: [
+        { id: 22, status: 'pending', created_at: new Date().toISOString(), customer_name: 'Alex', total_amount: '15.00' },
+        { id: 21, status: 'pending', created_at: new Date().toISOString(), customer_name: 'Sam', total_amount: '25.00' },
+      ],
+      meta: { total: 2, totalPages: 1 },
+    };
+    const params = { status: 'pending', page: 1, limit: 20 };
+    client.setQueryData(adminKeys.orders('4', params), refreshedOrders);
+    expect(await screen.findByText('New')).toBeInTheDocument();
+
+    client.setQueryData(adminKeys.orders('4', params), refreshedOrders);
+    expect(await screen.findByText('New')).toBeInTheDocument();
   });
 
   it('requires a platform role for platform routes', async () => {

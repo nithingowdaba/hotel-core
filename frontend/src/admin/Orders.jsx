@@ -6,10 +6,22 @@ import { formatDate, formatMoney } from '../lib/format.js';
 import { Button, StatusChip } from '../components/ui/index.jsx';
 import { AdminEmpty, AdminError, AdminLoading, ConfirmDialog, PageHeading, Tabs, useNotice } from './components.jsx';
 import { adminApi, adminKeys, displayError } from './api.js';
+import { todayIST } from './date.js';
 
-const todayIST = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const statusTabs = [{ value: 'pending', label: 'Pending' }, { value: 'completed', label: 'Completed' }, { value: 'cancelled', label: 'Cancelled' }];
 const unwrapRows = (payload) => payload?.items || payload?.data || (Array.isArray(payload) ? payload : []);
+
+function formatOrderAge(createdAt) {
+  const timestamp = Date.parse(createdAt);
+  if (!Number.isFinite(timestamp)) return 'Time unavailable';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
 
 export default function AdminOrders() {
   const { hotelId, suspended } = useOutletContext();
@@ -33,17 +45,24 @@ export default function AdminOrders() {
     retry: (count, error) => error.status >= 400 && error.status < 500 ? false : count < 1,
   });
   const rows = unwrapRows(query.data);
+  const pendingCount = Number(query.data?.meta?.total ?? rows.length);
+  const oldestVisibleOrder = rows.reduce((oldest, order) => (
+    !oldest || Date.parse(order.created_at) < Date.parse(oldest.created_at) ? order : oldest
+  ), null);
   React.useEffect(() => { if (!query.data) return; setLoadedRows((old) => page === 1 ? rows : [...old, ...rows]); }, [query.data, page, rows]);
   const totalPages = query.data?.meta?.totalPages || 1;
   React.useEffect(() => {
     if (!query.data) return;
     const ids = new Set(rows.map((order) => String(order.id)));
-    if (seen.current && status === 'pending') setNewIds([...ids].filter((id) => !seen.current.has(id)));
+    if (seen.current && status === 'pending') {
+      const newOrderIds = [...ids].filter((id) => !seen.current.has(id));
+      if (newOrderIds.length) setNewIds((current) => [...new Set([...current, ...newOrderIds])]);
+    }
     seen.current = ids;
     if (status === 'pending') document.title = `(${query.data?.meta?.total ?? rows.length}) Orders · hotel-core`;
     else document.title = `${status[0].toUpperCase()}${status.slice(1)} orders · hotel-core`;
   }, [query.data, rows, status]);
-  const refresh = () => query.refetch().then(() => setNewIds([]));
+  const refresh = () => query.refetch();
 
   const complete = useMutation({
     mutationFn: (id) => adminApi.updateOrder(hotelId, id),
@@ -64,6 +83,11 @@ export default function AdminOrders() {
     <PageHeading eyebrow="HOTEL WORKSPACE" title="Live orders" actions={<><span className="admin-last-updated">Updated {query.dataUpdatedAt ? formatDate(query.dataUpdatedAt) : '—'}</span><Button variant="secondary" onClick={refresh} disabled={query.isFetching}><RefreshCw size={16}/> Refresh</Button></>}/>
     <Tabs items={statusTabs} value={status} onChange={changeStatus} label="Order status"/>
     <div className="admin-toolbar">{status === 'pending' ? <label className="admin-toggle admin-date-toggle"><span className="admin-toggle-copy"><strong>Show all pending dates</strong><small>Pending orders are live by default.</small></span><input type="checkbox" checked={!date} onChange={(event) => { setDate(event.target.checked ? '' : todayIST()); setPage(1); }}/><span className="admin-toggle-track" aria-hidden="true"/></label> : <label>Order date <input type="date" value={date || todayIST()} onChange={(event) => { setDate(event.target.value); setPage(1); }}/></label>}{query.isFetching && <span className="admin-last-updated" role="status">Refreshing…</span>}</div>
+    {status === 'pending' && <div className="admin-pending-summary" role="status">
+      <strong>{pendingCount} pending {pendingCount === 1 ? 'order' : 'orders'}</strong>
+      {oldestVisibleOrder && <span>Oldest on this page: {formatOrderAge(oldestVisibleOrder.created_at)}</span>}
+      {query.isFetching && <span>Updating…</span>}
+    </div>}
     {query.isError && <div className="admin-inline-error" role="alert">{displayError(query.error)}</div>}
     {!loadedRows.length ? <AdminEmpty title={`No ${status} orders`} detail={status === 'pending' ? 'New customer orders will appear here automatically.' : 'Try another date to see order history.'}/> : <div className="admin-order-list">{loadedRows.map((order) => <OrderCard key={order.id} order={order} hotelId={hotelId} expanded={expanded === String(order.id)} onExpand={() => setExpanded(expanded === String(order.id) ? null : String(order.id))} isNew={newIds.includes(String(order.id))} onComplete={() => complete.mutate(order.id)} onCancel={() => setCancelId(order.id)} completing={complete.isPending && String(complete.variables) === String(order.id)} cancelling={cancel.isPending && String(cancel.variables) === String(order.id)} canWrite={!suspended}/>)}</div>}
     {page < totalPages && <button type="button" className="button button-secondary load-more" disabled={query.isFetching} onClick={() => setPage((value) => value + 1)}>Load more</button>}
@@ -76,8 +100,13 @@ function OrderCard({ order, hotelId, expanded, onExpand, isNew, onComplete, onCa
   const cancelled = order.cancelled_at || order.status === 'cancelled';
   const currentStatus = cancelled ? 'cancelled' : order.status;
   return <article className={`admin-order-card ${isNew ? 'is-new' : ''}`}>
-    <div className="admin-order-head"><h2>Order #{order.id}</h2><StatusChip status={currentStatus}/></div>
-    <div className="admin-order-meta"><span><Clock3 size={14}/>{formatDate(order.created_at)}</span><span>{order.customer_name}</span>{order.phone && <a href={`tel:${order.phone}`}>{order.phone}</a>}</div>
+    <div className="admin-order-head"><div className="admin-order-title"><h2>Order #{order.id}</h2>{isNew && currentStatus === 'pending' && <span className="admin-new-order-badge">New</span>}</div><StatusChip status={currentStatus}/></div>
+    <div className="admin-order-meta">
+      <span><Clock3 size={14}/><time dateTime={order.created_at}>{formatDate(order.created_at)}</time></span>
+      <span className="admin-order-age" aria-label="Order age">{formatOrderAge(order.created_at)}</span>
+      <span>{order.customer_name || 'Customer'}</span>
+      {order.phone && <a href={`tel:${order.phone}`}>{order.phone}</a>}
+    </div>
     <div className="admin-order-meta"><span>Payment: {String(order.payment_method || '').toUpperCase()}</span><span>{order.items_summary || `${order.item_count || 'Items'} in order`}</span></div>
     <div className="admin-order-total"><span>Total</span><strong>{formatMoney(order.total_amount)}</strong></div>
     <div className="admin-order-actions"><Button variant="secondary" aria-expanded={expanded} onClick={onExpand}>{expanded ? <ChevronUp size={16}/> : <ChevronDown size={16}/>} {expanded ? 'Hide items' : 'View items'}</Button>{currentStatus === 'pending' && <><Button disabled={!canWrite || completing || cancelling} onClick={onComplete}>{completing ? 'Saving…' : 'Mark completed'}</Button><Button variant="danger" disabled={!canWrite || completing || cancelling} onClick={onCancel}>{cancelling ? 'Saving…' : 'Cancel'}</Button></>}</div>

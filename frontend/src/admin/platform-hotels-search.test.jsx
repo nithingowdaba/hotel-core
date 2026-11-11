@@ -21,7 +21,7 @@ describe('platform hotel listing search', () => {
       const search = parsed.searchParams.get('search');
       if (parsed.searchParams.get('status') === 'pending') return result([{ id: 22, name: 'Legacy Hotel', slug: 'legacy-hotel', status: 'pending' }], { total: 1, totalPages: 1, page: 1 });
       if (parsed.searchParams.get('status') === 'suspended') return result([{ id: 22, name: 'Suspended Hotel', slug: 'suspended-hotel', status: 'suspended' }], { total: 1, totalPages: 1, page: 1 });
-      if (!search && page === 1) return result(Array.from({ length: 20 }, (_, index) => ({ id: index + 1, name: `Hotel ${index + 1}`, slug: `hotel-${index + 1}`, status: 'active' })), { total: 21, totalPages: 2, page: 1 });
+      if (!search && page === 1) return result(Array.from({ length: 20 }, (_, index) => ({ id: index + 1, name: `Hotel ${index + 1}`, slug: `hotel-${index + 1}`, status: 'active', ...(index === 0 ? { owner_name: 'Asha Owner', owner_email: 'asha@example.test' } : {}) })), { total: 21, totalPages: 2, page: 1 });
       if (!search && page === 2) return result([{ id: 21, name: 'Target Hotel', slug: 'target-hotel', status: 'active' }], { total: 21, totalPages: 2, page: 2 });
       if (search === 'Target Hotel' && page === 1) return result([{ id: 21, name: 'Target Hotel', slug: 'target-hotel', status: 'active' }], { total: 1, totalPages: 1, page: 1 });
       if (search === 'No Such Hotel' && page === 1) return result([], { total: 0, totalPages: 0, page: 1 });
@@ -37,6 +37,8 @@ describe('platform hotel listing search', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><MemoryRouter><PlatformHotels/></MemoryRouter></QueryClientProvider>);
     expect((await screen.findAllByText('Hotel 1')).length).toBeGreaterThan(0);
+    expect(await screen.findAllByText('Asha Owner')).not.toHaveLength(0);
+    expect(screen.getAllByText('asha@example.test')).not.toHaveLength(0);
     expect(global.fetch.mock.calls[0][0]).toContain('page=1&limit=20');
 
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));

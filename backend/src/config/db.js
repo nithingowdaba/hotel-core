@@ -1,7 +1,7 @@
-'use strict';
+"use strict";
 
-const mysql = require('mysql2/promise');
-const env = require('./env');
+const mysql = require("mysql2/promise");
+const env = require("./env");
 
 let pool;
 
@@ -16,7 +16,7 @@ function getPool() {
       queueLimit: 100,
       enableKeepAlive: true,
       keepAliveInitialDelay: 0,
-      timezone: '+00:00',
+      timezone: "+00:00",
       dateStrings: false,
     };
 
@@ -28,20 +28,22 @@ function getPool() {
     }
 
     pool = mysql.createPool(config);
-    pool.on('connection', (connection) => {
+
+    pool.on("connection", (connection) => {
       connection.query("SET time_zone = '+00:00'", (error) => {
-        if (error) connection.destroy();
+        if (error) {
+          console.error("[db] Timezone setup failed:", error.message);
+          connection.destroy();
+        }
       });
     });
   }
+
   return pool;
 }
 
 /**
  * Execute a parameterized query against the pool.
- * @param {string} sql
- * @param {Array} [params]
- * @returns {Promise<[import('mysql2').RowDataPacket[], import('mysql2').FieldPacket[]]>}
  */
 async function query(sql, params = []) {
   const conn = getPool();
@@ -49,17 +51,18 @@ async function query(sql, params = []) {
 }
 
 /**
- * Run a function inside a transaction. Rolls back on error.
- * @param {(connection: import('mysql2/promise').Connection) => Promise<T>} fn
- * @returns {Promise<T>}
- * @template T
+ * Run a function inside a transaction.
  */
 async function withTransaction(fn) {
   const connection = await getPool().getConnection();
-  await connection.beginTransaction();
+
   try {
+    await connection.beginTransaction();
+
     const result = await fn(connection);
+
     await connection.commit();
+
     return result;
   } catch (err) {
     await connection.rollback();
@@ -71,15 +74,21 @@ async function withTransaction(fn) {
 
 /**
  * Verify the database is reachable.
- * @returns {Promise<boolean>}
  */
 async function checkConnection() {
   try {
-    await query('SELECT 1');
+    await query("SELECT 1");
     return true;
-  } catch {
+  } catch (error) {
+    console.error("[db] Readiness check failed:", error.code, error.message);
+
     return false;
   }
 }
 
-module.exports = { getPool, query, withTransaction, checkConnection };
+module.exports = {
+  getPool,
+  query,
+  withTransaction,
+  checkConnection,
+};

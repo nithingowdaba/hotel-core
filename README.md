@@ -28,6 +28,15 @@ DB_NAME=hotel_core_dev npm run db:init
 DB_NAME=hotel_core_dev npm run db:seed
 ```
 
+For an existing database, apply the latest repeatable schema migrations with:
+
+```sh
+cd backend
+DB_NAME=hotel_core_dev npm run migrate
+```
+
+Migrations 003 and 004 add customer address/feedback storage and a saved-address book with an order delivery-address snapshot. Migration 004 carries existing customer profile addresses into the address book. Apply them to the intended database before using address selection at checkout.
+
 Demo seeding is idempotent and allowed only for a database ending in `_dev` or `_test`. It upserts the named demo hotels and menu rows; it does not delete existing records. Reset is restricted to a disposable `_test` database and requires its exact name:
 
 ```sh

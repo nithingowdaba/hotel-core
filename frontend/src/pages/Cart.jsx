@@ -5,9 +5,201 @@ import { useSession } from '../store/session.js';
 import { useHotel, usePlaceOrder } from '../api/hooks.js';
 import { formatMoney, paiseToRupees, rupeesToPaise, sumPaise } from '../lib/format.js';
 import { Button, ErrorState, Stepper } from '../components/ui/index.jsx';
-const payments=[['cash','Cash'],['upi','UPI'],['card','Card']];
-export default function Cart(){const cart=useCart(),token=useSession(s=>s.token),nav=useNavigate(),[payment,setPayment]=React.useState('cash'),[lineErrors,setLineErrors]=React.useState({}),[message,setMessage]=React.useState(''); const hotelQ=useHotel(cart.hotelId),mutation=usePlaceOrder(); const total=sumPaise(cart.items); const hotel=hotelQ.data; const closed=hotel && !hotel.accepting_orders;
- const checkout=()=>{if(!token){nav(`/login?next=${encodeURIComponent('/cart')}`);return;} if(closed||!cart.items.length||mutation.isPending)return;setMessage('');setLineErrors({});mutation.mutate({hotelId:cart.hotelId,body:{payment_method:payment,items:cart.items.map((x)=>({menu_item_id:x.menu_item_id,quantity:x.qty}))}},{onSuccess:(data)=>{sessionStorage.setItem('hotel-core-last-order',JSON.stringify({order:data,hotelName:cart.hotelName,items:cart.items}));cart.clear();nav('/order-placed',{state:{order:data,hotelName:cart.hotelName,items:cart.items}});},onError:(e)=>{if(e.code==='ITEM_UNAVAILABLE'||e.code==='INVALID_MENU_ITEM'){const details=Array.isArray(e.details)?e.details:[];const next={};details.forEach((x)=>{const id=x.menu_item_id||x.id;if(id)next[id]=x.message||e.message;});if(!Object.keys(next).length&&cart.items[0])next[cart.items[0].menu_item_id]=e.message;setLineErrors(next);return;}if(e.code==='HOTEL_CLOSED'||e.code==='HOTEL_SUSPENDED'){setMessage(e.message);hotelQ.refetch();return;}setMessage(e.message);}});};
- if(!cart.items.length)return <section className="page"><div className="state-panel"><span className="empty-icon">⌂</span><h1>Your cart is empty</h1><p>Find something delicious nearby.</p><Link className="button button-primary" to="/">Browse hotels</Link></div></section>;
- return <section className="page cart-page"><div className="page-header-actions"><Link className="button button-secondary" to="/search">Continue shopping</Link><Link className="button button-primary" to="/orders">View my orders</Link></div><p className="eyebrow">YOUR ORDER</p><h1>Your cart</h1><h2>{cart.hotelName}</h2>{hotelQ.isError&&<ErrorState error={hotelQ.error} retry={hotelQ.refetch}/>}<div className="cart-lines">{cart.items.map(x=><article className={`cart-line ${lineErrors[x.menu_item_id]?'line-error':''}`} key={x.menu_item_id}><div><h3>{x.name}</h3><span>{formatMoney(x.price)} each</span>{lineErrors[x.menu_item_id]&&<p className="line-error-copy">{lineErrors[x.menu_item_id]} <button onClick={()=>{cart.remove(x.menu_item_id);setLineErrors((s)=>{const n={...s};delete n[x.menu_item_id];return n;});}}>Remove</button></p>}</div><Stepper qty={x.qty} label={x.name} onIncrement={()=>cart.increment(x.menu_item_id)} onDecrement={()=>cart.decrement(x.menu_item_id)}/><strong>{formatMoney(paiseToRupees(rupeesToPaise(x.price)*x.qty))}</strong></article>)}</div><section className="payment-section"><h2>Payment method</h2><p>Payment is recorded only. No online payment is taken.</p><div className="payment-options">{payments.map(([value,label])=><label key={value} className={payment===value?'selected':''}><input type="radio" name="payment" value={value} checked={payment===value} onChange={()=>setPayment(value)}/>{label}</label>)}</div></section>{(closed||message)&&<div className="closed-banner" role="alert">{message||'This hotel is closed and cannot accept your order right now.'}</div>}<div className="bill-summary"><div><span>Item total</span><strong>{formatMoney(paiseToRupees(total))}</strong></div><p>No taxes or delivery fees in this version.</p></div>{message&&<p className="form-error" role="alert">{message}</p>}<div className="place-order-wrap"><Button className="full place-order" onClick={checkout} disabled={mutation.isPending||closed||hotelQ.isPending}>{mutation.isPending?'Placing order…':`Place order · ${formatMoney(paiseToRupees(total))}`}</Button></div></section>;
+
+const payments = [['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card']];
+const upiIdPattern = /^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,63}$/;
+
+export default function Cart() {
+  const cart = useCart();
+  const token = useSession((state) => state.token);
+  const navigate = useNavigate();
+  const [payment, setPayment] = React.useState('cash');
+  const [upiId, setUpiId] = React.useState('');
+  const [cardLastFour, setCardLastFour] = React.useState('');
+  const [lineErrors, setLineErrors] = React.useState({});
+  const [message, setMessage] = React.useState('');
+  const hotelQuery = useHotel(cart.hotelId);
+  const mutation = usePlaceOrder();
+  const total = sumPaise(cart.items);
+  const hotel = hotelQuery.data;
+  const closed = hotel && !hotel.accepting_orders;
+  const paymentDetailsValid = payment === 'cash'
+    || (payment === 'upi' && upiIdPattern.test(upiId.trim()))
+    || (payment === 'card' && /^\d{4}$/.test(cardLastFour));
+
+  const checkout = () => {
+    if (!token) {
+      navigate(`/login?next=${encodeURIComponent('/cart')}`);
+      return;
+    }
+    if (closed || !cart.items.length || mutation.isPending || !paymentDetailsValid) return;
+
+    setMessage('');
+    setLineErrors({});
+    mutation.mutate({
+      hotelId: cart.hotelId,
+      body: {
+        payment_method: payment,
+        items: cart.items.map((item) => ({
+          menu_item_id: item.menu_item_id,
+          quantity: item.qty,
+        })),
+      },
+    }, {
+      onSuccess: (data) => {
+        const orderData = { order: data, hotelName: cart.hotelName, items: cart.items };
+        sessionStorage.setItem('hotel-core-last-order', JSON.stringify(orderData));
+        cart.clear();
+        navigate('/order-placed', { state: orderData });
+      },
+      onError: (error) => {
+        if (error.code === 'ITEM_UNAVAILABLE' || error.code === 'INVALID_MENU_ITEM') {
+          const details = Array.isArray(error.details) ? error.details : [];
+          const nextErrors = {};
+          details.forEach((detail) => {
+            const id = detail.menu_item_id || detail.id;
+            if (id) nextErrors[id] = detail.message || error.message;
+          });
+          if (!Object.keys(nextErrors).length && cart.items[0]) {
+            nextErrors[cart.items[0].menu_item_id] = error.message;
+          }
+          setLineErrors(nextErrors);
+          return;
+        }
+        if (error.code === 'HOTEL_CLOSED' || error.code === 'HOTEL_SUSPENDED') {
+          setMessage(error.message);
+          hotelQuery.refetch();
+          return;
+        }
+        setMessage(error.message);
+      },
+    });
+  };
+
+  if (!cart.items.length) {
+    return <section className="page">
+      <div className="state-panel">
+        <span className="empty-icon">⌂</span>
+        <h1>Your cart is empty</h1>
+        <p>Find something delicious nearby.</p>
+        <Link className="button button-primary" to="/">Browse hotels</Link>
+      </div>
+    </section>;
+  }
+
+  return <section className="page cart-page">
+    <div className="page-header-actions">
+      <Link className="button button-secondary" to="/search">Continue shopping</Link>
+      <Link className="button button-primary" to="/orders">View my orders</Link>
+    </div>
+    <p className="eyebrow">YOUR ORDER</p>
+    <h1>Your cart</h1>
+    <h2>{cart.hotelName}</h2>
+    {hotelQuery.isError && <ErrorState error={hotelQuery.error} retry={hotelQuery.refetch}/>}
+    <div className="cart-lines">
+      {cart.items.map((item) => <article
+        className={`cart-line ${lineErrors[item.menu_item_id] ? 'line-error' : ''}`}
+        key={item.menu_item_id}
+      >
+        <div>
+          <h3>{item.name}</h3>
+          <span>{formatMoney(item.price)} each</span>
+          {lineErrors[item.menu_item_id] && <p className="line-error-copy">
+            {lineErrors[item.menu_item_id]}{' '}
+            <button type="button" onClick={() => {
+              cart.remove(item.menu_item_id);
+              setLineErrors((current) => {
+                const next = { ...current };
+                delete next[item.menu_item_id];
+                return next;
+              });
+            }}>Remove</button>
+          </p>}
+        </div>
+        <Stepper
+          qty={item.qty}
+          label={item.name}
+          onIncrement={() => cart.increment(item.menu_item_id)}
+          onDecrement={() => cart.decrement(item.menu_item_id)}
+        />
+        <strong>{formatMoney(paiseToRupees(rupeesToPaise(item.price) * item.qty))}</strong>
+      </article>)}
+    </div>
+
+    <section className="payment-section" aria-labelledby="payment-heading">
+      <h2 id="payment-heading">Payment method</h2>
+      <p>Payment is recorded only. No online payment is taken.</p>
+      <div className="payment-options">
+        {payments.map(([value, label]) => <label key={value} className={payment === value ? 'selected' : ''}>
+          <input
+            type="radio"
+            name="payment"
+            value={value}
+            checked={payment === value}
+            onChange={() => setPayment(value)}
+          />
+          {label}
+        </label>)}
+      </div>
+      {payment === 'upi' && <label className="field-label" htmlFor="checkout-upi-id">
+        UPI ID
+        <input
+          id="checkout-upi-id"
+          autoComplete="off"
+          inputMode="email"
+          value={upiId}
+          onChange={(event) => setUpiId(event.target.value)}
+          placeholder="name@bank"
+          aria-invalid={Boolean(upiId) && !upiIdPattern.test(upiId.trim())}
+        />
+      </label>}
+      {payment === 'card' && <label className="field-label" htmlFor="checkout-card-last-four">
+        Last 4 digits of card
+        <input
+          id="checkout-card-last-four"
+          autoComplete="off"
+          inputMode="numeric"
+          maxLength={4}
+          pattern="[0-9]{4}"
+          value={cardLastFour}
+          onChange={(event) => setCardLastFour(event.target.value.replace(/\D/g, '').slice(0, 4))}
+          placeholder="1234"
+          aria-invalid={Boolean(cardLastFour) && !/^\d{4}$/.test(cardLastFour)}
+        />
+      </label>}
+      {payment !== 'cash' && <p className="payment-disclaimer">
+        These details only validate the form. They are not sent to the server or used to process a payment.
+      </p>}
+    </section>
+
+    {(closed || message) && <div className="closed-banner" role="alert">
+      {message || 'This hotel is closed and cannot accept your order right now.'}
+    </div>}
+    <div className="bill-summary">
+      <h2>Review your order</h2>
+      <div>
+        <span>Items ({cart.items.reduce((count, item) => count + item.qty, 0)})</span>
+        <strong>{formatMoney(paiseToRupees(total))}</strong>
+      </div>
+      <div>
+        <span>Payment method</span>
+        <strong>{payments.find(([value]) => value === payment)?.[1] || 'Cash'}</strong>
+      </div>
+      <div>
+        <span>Total due at checkout</span>
+        <strong>{formatMoney(paiseToRupees(total))}</strong>
+      </div>
+      <p>No taxes or delivery fees in this version.</p>
+    </div>
+    {message && <p className="form-error" role="alert">{message}</p>}
+    <div className="place-order-wrap">
+      <Button
+        className="full place-order"
+        onClick={checkout}
+        disabled={mutation.isPending || closed || hotelQuery.isPending || !paymentDetailsValid}
+      >
+        {mutation.isPending ? 'Placing order…' : `Place order · ${formatMoney(paiseToRupees(total))}`}
+      </Button>
+    </div>
+  </section>;
 }

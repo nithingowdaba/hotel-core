@@ -4,9 +4,8 @@ import { useOutletContext } from 'react-router-dom';
 import { formatMoney } from '../lib/format.js';
 import { AdminEmpty, AdminError, AdminLoading, PageHeading, Tabs } from './components.jsx';
 import { adminApi, adminKeys, displayError } from './api.js';
+import { shiftDate, todayIST } from './date.js';
 
-const todayIST = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const shiftDate = (date, days) => { const [year, month, day] = date.split('-').map(Number); const value = new Date(Date.UTC(year, month - 1, day + days)); return value.toISOString().slice(0, 10); };
 const rowsOf = (value) => value?.items || value?.data || (Array.isArray(value) ? value : []);
 
 export default function AdminReports() {

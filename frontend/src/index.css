@@ -7,6 +7,62 @@
 @media(min-width:1200px){.hotel-grid,.skeleton-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:359px){.menu-controls{gap:7px}.toggle{font-size:11px}.menu-item{grid-template-columns:minmax(0,1fr) 86px}.menu-image-wrap,.menu-image,.menu-image-wrap>div{width:80px;height:80px}.page{width:calc(100% - 24px)}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+.role-heading{display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:0 10px;border-radius:999px;background:var(--brand-soft);color:var(--brand-dark);font-size:12px;font-weight:800;white-space:nowrap}
+.account-order-history{margin:24px 0}.account-order-history>h2{font-size:20px;margin:0 0 14px}
+.home-admin-actions{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 20px}
+.home-register-hotel{display:inline-flex;margin-top:12px}
+.header-account-icon{width:42px;height:42px;display:grid;place-items:center;border:1px solid var(--border);border-radius:50%;background:var(--surface);color:var(--brand-dark);box-shadow:var(--shadow-1)}
+.header-account-icon:hover,.header-account-icon:focus-visible{background:var(--brand-soft);outline-color:var(--brand)}
+.header-auth-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:0 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--brand-dark);font-size:13px;font-weight:750;white-space:nowrap}
+.header-auth-link:hover,.header-auth-link:focus-visible{background:var(--brand-soft);outline-color:var(--brand)}
+@media(min-width:900px){.header-auth-link{display:none}}
+@media(max-width:479px){.header-auth-link{width:40px;padding:0}.header-auth-link span{display:none}}
+.account-back{margin-bottom:18px}
+.success-back-home{margin-bottom:18px}
+.orders-back-home{margin-bottom:18px}
+.order-progress{margin:20px 0;padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg)}
+.order-progress h2{margin:0 0 16px;font-size:17px}
+.customer-home-tabs{grid-template-columns:1fr}
+.customer-home-tabs a{max-width:120px;justify-self:center}
+.order-timeline{list-style:none;padding:0;margin:0}
+.order-timeline-step{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr);gap:10px;min-height:64px;color:var(--text-muted)}
+.order-timeline-step:not(:last-child)::before{position:absolute;top:17px;bottom:0;left:8px;width:2px;background:var(--border);content:""}
+.order-timeline-marker{position:relative;z-index:1;width:18px;height:18px;margin-top:1px;border:2px solid var(--border);border-radius:50%;background:var(--surface)}
+.order-timeline-step>div{display:grid;align-content:start;gap:4px;padding-bottom:16px;font-size:13px}
+.order-timeline-step strong{color:var(--text);font-size:14px}
+.order-timeline-step time,.order-timeline-step>div>span{font-size:12px}
+.order-timeline-step.is-complete .order-timeline-marker{border-color:var(--success);background:var(--success);box-shadow:inset 0 0 0 4px var(--surface)}
+.order-timeline-step.is-pending,.order-timeline-step.is-completed,.order-timeline-step.is-cancelled{color:var(--text)}
+.order-timeline-step.is-pending .order-timeline-marker{border-color:var(--warning);background:var(--warning)}
+.order-timeline-step.is-completed .order-timeline-marker{border-color:var(--success);background:var(--success)}
+.order-timeline-step.is-cancelled .order-timeline-marker{border-color:var(--danger);background:var(--danger)}
+
+/* Hotel Core branded fallback for hotels without a photo or with a broken image. */
+.hotel-order-status{display:inline-flex;align-items:center;gap:6px;margin-top:3px;padding:5px 9px;border-radius:999px;background:#eaf7ef;color:#187844;font-size:12px;font-weight:750}
+.hotel-order-status.is-closed{background:#fff0ee;color:#a52a22}
+.hotel-closed .hotel-card-copy{opacity:1}
+.closed-overlay{inset:12px 12px auto auto;padding:7px 10px;border-radius:999px;background:rgba(28,28,30,.82);font-size:12px}
+.order-history-groups{display:grid;gap:24px}
+.order-history-group>h2{margin:0 0 10px;font-size:17px}
+.order-card h3{margin:0 0 4px;font-size:16px}
+.order-card-pending{border-color:#f0b06f;background:linear-gradient(110deg,#fffaf5,#fff 45%)}
+.order-card-pending .status-chip{font-weight:800}
+.bill-summary h2{margin:0 0 12px;font-size:17px}
+.bill-summary>div+div{margin-top:8px}
+.payment-section .field-label{display:grid;gap:7px;margin-top:14px;font-weight:700;font-size:14px}
+.payment-section .field-label input{width:100%;min-height:46px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-md);background:white;color:var(--text)}
+.payment-section .field-label input[aria-invalid=true]{border-color:var(--danger)}
+.payment-disclaimer{margin:12px 0 0;color:var(--text-muted);font-size:13px;line-height:1.5}
 
 /* Hotel Core branded fallback for hotels without a photo or with a broken image. */
 .placeholder-hotel,.placeholder-logo{background:linear-gradient(135deg,#fff5ec,#f1e4d9);color:var(--brand-dark)}
+
+@media(min-width:900px){.app-shell{padding-bottom:90px}.customer-home-tabs{display:grid;grid-template-columns:1fr;left:auto;right:12px;transform:none;bottom:16px;width:84px;height:64px;border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-2);padding-bottom:0}.customer-home-tabs a{max-width:none}}
+
+.hotel-hero{height:auto;min-height:300px;display:flex;align-items:flex-end;padding:24px 18px;isolation:isolate}
+.hotel-hero>div:not(.hotel-hero-content),.hotel-hero>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-2}
+.hotel-hero:after{z-index:-1}
+.hotel-hero-content{position:relative;inset:auto;left:auto;right:auto;bottom:auto;width:100%;height:auto;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding-top:100px}
+.hotel-hero-content h1{max-width:100%;overflow-wrap:anywhere;line-height:1.12}
+.open-pill{flex:none;white-space:nowrap}
+@media(min-width:900px){.hotel-hero{min-height:360px}}

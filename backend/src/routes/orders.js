@@ -33,6 +33,7 @@ const router = Router();
  *             required: [items, payment_method]
  *             properties:
  *               payment_method: { type: string, enum: [cash, upi, card] }
+ *               address_id: { type: integer, minimum: 1, description: Saved address belonging to the current customer }
  *               items:
  *                 type: array
  *                 minItems: 1
@@ -53,8 +54,13 @@ const router = Router();
  */
 router.post('/:hotelId/orders', [
   authenticate, positiveId('hotelId'), rejectUnknownQuery([]),
-  rejectUnknownBody(['items', 'payment_method']),
+  rejectUnknownBody(['items', 'payment_method', 'address_id']),
   body('payment_method').isIn(['cash', 'upi', 'card']),
+  body('address_id').optional().custom((value) => (
+    (typeof value === 'string' && /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)))
+    || (Number.isSafeInteger(value) && value > 0)
+  ))
+    .toInt().withMessage('address_id must be a positive integer.'),
   body('items').isArray({ min: 1, max: 50 }).bail().custom((items) => items.every((item) =>
     item && typeof item === 'object' && !Array.isArray(item)
     && Object.keys(item).every((key) => ['menu_item_id', 'quantity'].includes(key)))),
@@ -63,7 +69,13 @@ router.post('/:hotelId/orders', [
   validate, resolveHotel, requireOrderableHotel,
 ], asyncHandler(async (req, res) => {
   const items = req.body.items.map((item) => ({ menu_item_id: Number(item.menu_item_id), quantity: Number(item.quantity) }));
-  const order = await createOrder({ hotel: req.hotel, user: req.user, items, paymentMethod: req.body.payment_method });
+  const order = await createOrder({
+    hotel: req.hotel,
+    user: req.user,
+    items,
+    paymentMethod: req.body.payment_method,
+    addressId: req.body.address_id,
+  });
   single(res, order, 201);
 }));
 

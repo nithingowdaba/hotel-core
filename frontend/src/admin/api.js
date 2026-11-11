@@ -28,6 +28,7 @@ export const adminKeys = {
   menu: (id) => ['admin', 'menu', String(id)],
   orders: (id, params) => ['admin', 'orders', String(id), params],
   order: (hotelId, orderId) => ['admin', 'order', String(hotelId), String(orderId)],
+  orderNotifications: (id) => ['admin', 'order-notifications', String(id)],
   daily: (id, date) => ['admin', 'daily', String(id), date],
   top: (id, params) => ['admin', 'top', String(id), params],
   hotels: (params) => ['platform', 'hotels', params],

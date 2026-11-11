@@ -213,6 +213,148 @@ test('GET /auth/me returns memberships and never returns password_hash', async (
   assert.equal(Object.hasOwn(body.data, 'password_hash'), false);
 });
 
+test('customer profile address is private, validated, and persists across sign-ins', async (t) => {
+  const updated = await request('/api/me/profile', {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${customerToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ address: '  12 Test Street  ' }),
+  });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).data.address, '12 Test Street');
+
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'customer@example.test', password: 'Correct-test-password-01' }),
+  });
+  assert.equal(login.status, 200);
+  const { token: refreshedToken } = (await login.json()).data;
+  const currentUser = await request('/api/auth/me', {
+    headers: { authorization: `Bearer ${refreshedToken}` },
+  });
+  assert.equal((await currentUser.json()).data.address, '12 Test Street');
+
+  await t.test('rejects unknown fields and overlong addresses', async () => {
+    for (const body of [
+      { address: 'Valid', email: 'unexpected@example.test' },
+      { address: 'x'.repeat(256) },
+    ]) {
+      const response = await request('/api/me/profile', {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${customerToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 400);
+    }
+  });
+
+  await t.test('does not allow admin roles to update customer profiles', async () => {
+    const response = await request('/api/me/profile', {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${tokenFor(adminId)}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ address: 'Not a customer address' }),
+    });
+    assert.equal(response.status, 403);
+  });
+});
+
+test('customers can save and remove multiple delivery addresses', async () => {
+  const createAddress = (label, address) => request('/api/me/addresses', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${customerToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ label, address }),
+  });
+  const first = await createAddress('Home', '12 First Street');
+  assert.equal(first.status, 201);
+  const firstAddress = (await first.json()).data;
+  assert.equal(firstAddress.is_default, true);
+
+  const second = await createAddress('Work', '34 Office Road');
+  assert.equal(second.status, 201);
+  const secondAddress = (await second.json()).data;
+  assert.equal(secondAddress.is_default, false);
+
+  const listed = await request('/api/me/addresses', {
+    headers: { authorization: `Bearer ${customerToken}` },
+  });
+  assert.deepEqual((await listed.json()).data.map(({ label }) => label), ['Home', 'Work']);
+
+  const removed = await request(`/api/me/addresses/${firstAddress.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${customerToken}` },
+  });
+  assert.equal(removed.status, 200);
+  const remaining = await request('/api/me/addresses', {
+    headers: { authorization: `Bearer ${customerToken}` },
+  });
+  const addresses = (await remaining.json()).data;
+  assert.equal(addresses.length, 1);
+  assert.equal(addresses[0].id, secondAddress.id);
+  assert.equal(addresses[0].is_default, true);
+
+  const profile = await request('/api/auth/me', {
+    headers: { authorization: `Bearer ${customerToken}` },
+  });
+  assert.equal((await profile.json()).data.address, '34 Office Road');
+
+  const otherCustomer = await request(`/api/me/addresses/${secondAddress.id}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${tokenFor(adminId)}` },
+  });
+  assert.equal(otherCustomer.status, 404);
+});
+
+test('order feedback is limited to the owning customer after completion and saved once', async () => {
+  const [customerOrder] = await connection.execute(
+    `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount)
+     VALUES (1, ?, 'Test Customer', '1000000001', 'cash', 0)`,
+    [customerId],
+  );
+  const customerOrderId = customerOrder.insertId;
+  const feedbackPath = `/api/me/orders/${customerOrderId}/feedback`;
+  const sendFeedback = (token, body) => request(feedbackPath, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const pending = await sendFeedback(customerToken, { rating: 5, comment: 'Great' });
+  assert.equal(pending.status, 409);
+
+  const notOwner = await request(`/api/me/orders/${customerOrderId}`, {
+    headers: { authorization: `Bearer ${tokenFor(adminId)}` },
+  });
+  assert.equal(notOwner.status, 404);
+
+  await connection.execute("UPDATE orders SET status = 'completed' WHERE id = ?", [customerOrderId]);
+  const created = await sendFeedback(customerToken, { rating: 5, comment: '  Great meal  ' });
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).data.comment, 'Great meal');
+
+  const detail = await request(`/api/me/orders/${customerOrderId}`, {
+    headers: { authorization: `Bearer ${customerToken}` },
+  });
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).data.feedback.rating, 5);
+
+  const duplicate = await sendFeedback(customerToken, { rating: 4 });
+  assert.equal(duplicate.status, 409);
+  const invalidRating = await sendFeedback(customerToken, { rating: 6 });
+  assert.equal(invalidRating.status, 400);
+
+  const [adminOrder] = await connection.execute(
+    `INSERT INTO orders (hotel_id, user_id, customer_name, phone, payment_method, total_amount, status)
+     VALUES (1, ?, 'Hotel Admin', '1000000002', 'cash', 0, 'completed')`,
+    [adminId],
+  );
+  const adminSubmit = await request(`/api/me/orders/${adminOrder.insertId}/feedback`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tokenFor(adminId)}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ rating: 5 }),
+  });
+  assert.equal(adminSubmit.status, 403);
+});
+
 test('platform admin CLI creates an account that can log in', async () => {
   const script = path.resolve(__dirname, '..', 'scripts', 'create-platform-admin.js');
   const password = 'cli-test-password-01';

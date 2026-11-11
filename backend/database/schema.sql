@@ -3,6 +3,7 @@ CREATE TABLE users (
   full_name VARCHAR(120) NOT NULL,
   email VARCHAR(255) NOT NULL,
   phone VARCHAR(20) NOT NULL,
+  address VARCHAR(255) NULL,
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('CUSTOMER','PLATFORM_ADMIN') NOT NULL DEFAULT 'CUSTOMER',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -48,6 +49,20 @@ CREATE TABLE hotel_members (
   CONSTRAINT fk_members_hotel FOREIGN KEY (hotel_id) REFERENCES hotels(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE customer_addresses (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  label VARCHAR(60) NOT NULL,
+  address VARCHAR(255) NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_customer_addresses_user_default (user_id, is_default, id),
+  CONSTRAINT fk_customer_addresses_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE menu_items (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   hotel_id BIGINT UNSIGNED NOT NULL,
@@ -75,6 +90,7 @@ CREATE TABLE orders (
   customer_name VARCHAR(120) NOT NULL,
   phone VARCHAR(20) NOT NULL,
   payment_method ENUM('cash','upi','card') NOT NULL,
+  delivery_address VARCHAR(255) NULL,
   total_amount DECIMAL(10,2) NOT NULL,
   status ENUM('pending','completed') NOT NULL DEFAULT 'pending',
   cancelled_at TIMESTAMP NULL DEFAULT NULL,
@@ -107,4 +123,20 @@ CREATE TABLE order_items (
   CONSTRAINT chk_item_price CHECK (unit_price > 0),
   CONSTRAINT chk_item_quantity CHECK (quantity > 0),
   CONSTRAINT chk_item_subtotal CHECK (subtotal > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE order_feedback (
+  order_id BIGINT UNSIGNED NOT NULL,
+  hotel_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  rating TINYINT UNSIGNED NOT NULL,
+  comment VARCHAR(2000) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (order_id),
+  KEY idx_order_feedback_hotel_created (hotel_id, created_at),
+  CONSTRAINT fk_order_feedback_order FOREIGN KEY (order_id, hotel_id)
+    REFERENCES orders(id, hotel_id) ON DELETE CASCADE,
+  CONSTRAINT fk_order_feedback_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT chk_order_feedback_rating CHECK (rating BETWEEN 1 AND 5)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

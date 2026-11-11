@@ -21,7 +21,9 @@ if (process.env.DB_PASSWORD === undefined) {
   throw new Error('Database tests require DB_PASSWORD (it may be empty if the test account has no password).');
 }
 
-const { runMigration, runOnboardingMigration } = require('../scripts/migrate');
+const {
+  runMigration, runOnboardingMigration, runCustomerProfileFeedbackMigration, runCustomerAddressBookMigration,
+} = require('../scripts/migrate');
 const { initDatabase } = require('../scripts/init-db');
 const { SCHEMA_PATH } = require('../scripts/db-schema');
 const { seedDatabase } = require('../scripts/seed-db');
@@ -171,7 +173,7 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
       assert.equal(await fs.readFile(path.resolve(__dirname, '..', 'database', 'seed.sql'), 'utf8'), await fs.readFile(require('../scripts/seed-db').SEED_PATH, 'utf8'));
     });
 
-    await t.test('fresh install creates the six required InnoDB tables and composite keys', async () => {
+    await t.test('fresh install creates the eight required InnoDB tables and tenant constraints', async () => {
       const [rows] = await connection.execute(
         `SELECT TABLE_NAME, ENGINE, TABLE_COLLATION
          FROM information_schema.TABLES
@@ -179,7 +181,7 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
         [databaseName],
       );
       assert.deepEqual(rows.map((row) => row.TABLE_NAME).sort(), [
-        'hotel_members', 'hotels', 'menu_items', 'order_items', 'orders', 'users',
+        'customer_addresses', 'hotel_members', 'hotels', 'menu_items', 'order_feedback', 'order_items', 'orders', 'users',
       ]);
       assert.ok(rows.every((row) => row.ENGINE === 'InnoDB'));
       assert.ok(rows.every((row) => row.TABLE_COLLATION === 'utf8mb4_0900_ai_ci'));
@@ -195,7 +197,11 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
         'hotels.cuisines', 'hotels.logo_url', 'hotels.cover_url', 'hotels.accepting_orders',
         'hotels.rejection_reason', 'hotels.submitted_at', 'hotels.approved_at', 'hotels.approved_by',
         'menu_items.is_veg', 'menu_items.image_url', 'menu_items.hotel_id',
-        'orders.hotel_id', 'order_items.hotel_id', 'users.is_active',
+        'orders.hotel_id', 'orders.delivery_address', 'order_items.hotel_id', 'users.is_active', 'users.address',
+        'customer_addresses.id', 'customer_addresses.user_id', 'customer_addresses.label',
+        'customer_addresses.address', 'customer_addresses.is_default',
+        'order_feedback.order_id', 'order_feedback.hotel_id', 'order_feedback.user_id',
+        'order_feedback.rating', 'order_feedback.comment',
       ]) {
         assert.ok(columnSet.has(column), `fresh schema must include ${column}`);
       }
@@ -206,13 +212,16 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
          WHERE CONSTRAINT_SCHEMA = ?
            AND CONSTRAINT_NAME IN (
              'fk_oi_order', 'fk_oi_menu', 'chk_menu_price', 'chk_order_total',
-             'chk_item_price', 'chk_item_quantity', 'chk_item_subtotal'
+             'chk_item_price', 'chk_item_quantity', 'chk_item_subtotal',
+             'fk_order_feedback_order', 'fk_order_feedback_user', 'chk_order_feedback_rating',
+             'fk_customer_addresses_user'
            )`,
         [databaseName],
       );
       assert.deepEqual(keys.map((row) => row.CONSTRAINT_NAME).sort(), [
         'chk_item_price', 'chk_item_quantity', 'chk_item_subtotal', 'chk_menu_price',
-        'chk_order_total', 'fk_oi_menu', 'fk_oi_order',
+        'chk_order_feedback_rating', 'chk_order_total', 'fk_customer_addresses_user',
+        'fk_oi_menu', 'fk_oi_order', 'fk_order_feedback_order', 'fk_order_feedback_user',
       ]);
       assert.match(schema, /CREATE TABLE users/);
       const [[statusColumn]] = await connection.execute(
@@ -274,6 +283,42 @@ test('fresh schema, old-schema migration, and tenant constraints', async (t) => 
         `INSERT INTO hotels (name, slug, status) VALUES ('Migration Active', 'migration-active', 'active')`,
       );
       await runOnboardingMigration(connection);
+      await runCustomerProfileFeedbackMigration(connection);
+      await runCustomerProfileFeedbackMigration(connection);
+      await connection.execute('UPDATE users SET address = ? WHERE id = ?', ['Old saved address', 7]);
+      await runCustomerAddressBookMigration(connection);
+      await runCustomerAddressBookMigration(connection);
+      const [[addressColumn]] = await connection.execute(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'address'`,
+        [databaseName],
+      );
+      assert.equal(addressColumn.COLUMN_NAME, 'address');
+      const [[feedbackTable]] = await connection.execute(
+        `SELECT TABLE_NAME FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'order_feedback'`,
+        [databaseName],
+      );
+      assert.equal(feedbackTable.TABLE_NAME, 'order_feedback');
+      const [[addressBookTable]] = await connection.execute(
+        `SELECT TABLE_NAME FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'customer_addresses'`,
+        [databaseName],
+      );
+      assert.equal(addressBookTable.TABLE_NAME, 'customer_addresses');
+      const [[deliveryAddressColumn]] = await connection.execute(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'orders' AND COLUMN_NAME = 'delivery_address'`,
+        [databaseName],
+      );
+      assert.equal(deliveryAddressColumn.COLUMN_NAME, 'delivery_address');
+      const [[migratedAddress]] = await connection.execute(
+        'SELECT label, address, is_default FROM customer_addresses WHERE user_id = ?',
+        [7],
+      );
+      assert.equal(migratedAddress.label, 'Home');
+      assert.equal(migratedAddress.address, 'Old saved address');
+      assert.equal(Boolean(migratedAddress.is_default), true);
       const [hotelStatuses] = await connection.execute(
         'SELECT id, status FROM hotels WHERE id IN (?, ?) ORDER BY id', [1, activeHotel.insertId],
       );

@@ -1,15 +1,183 @@
 'use strict';
 
 const { Router } = require('express');
-const { query } = require('express-validator');
-const { query: dbQuery } = require('../config/db');
+const { body, query } = require('express-validator');
+const { query: dbQuery, withTransaction } = require('../config/db');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler, single, collection, httpError } = require('../utils/http');
-const { positiveId, paginationRules, pagination, rejectUnknownQuery, validate } = require('./routeUtils');
+const {
+  positiveId, paginationRules, pagination, rejectUnknownQuery, rejectUnknownBody, validate,
+} = require('./routeUtils');
 const { updateOrderState } = require('../services/orderService');
 
 const router = Router();
 router.use(authenticate);
+
+/** @openapi
+ * /api/me/profile:
+ *   patch:
+ *     tags: [Auth]
+ *     summary: Update the current customer's delivery address
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [address]
+ *             properties:
+ *               address: { type: string, maxLength: 255 }
+ *     responses:
+ *       200: { description: Updated customer profile }
+ *       400: { description: Invalid profile data }
+ *       401: { description: Authentication required }
+ *       403: { description: Customer account required }
+ */
+router.patch('/profile', [
+  rejectUnknownQuery([]),
+  rejectUnknownBody(['address'], { requireAtLeastOne: true }),
+  body('address').exists().withMessage('address is required.')
+    .bail().isString().isLength({ max: 255 })
+    .withMessage('address must be at most 255 characters.'),
+  validate,
+], asyncHandler(async (req, res) => {
+  if (req.user.role !== 'CUSTOMER') {
+    throw httpError(403, 'FORBIDDEN', 'Customer profile updates are not available for this account.');
+  }
+  const address = req.body.address.trim() || null;
+  await dbQuery('UPDATE users SET address = ? WHERE id = ?', [address, req.user.id]);
+  const [rows] = await dbQuery('SELECT address FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+  if (!rows.length) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  single(res, { ...req.user, address: rows[0].address });
+}));
+
+/** @openapi
+ * /api/me/addresses:
+ *   get:
+ *     tags: [Auth]
+ *     summary: List the current customer's saved delivery addresses
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200: { description: Saved addresses, with the default address first }
+ *       401: { description: Authentication required }
+ *       403: { description: Customer account required }
+ *   post:
+ *     tags: [Auth]
+ *     summary: Save a delivery address for the current customer
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [label, address]
+ *             properties:
+ *               label: { type: string, maxLength: 60 }
+ *               address: { type: string, maxLength: 255 }
+ *     responses:
+ *       201: { description: Saved address }
+ *       400: { description: Invalid address data }
+ *       401: { description: Authentication required }
+ *       403: { description: Customer account required }
+ * /api/me/addresses/{addressId}:
+ *   delete:
+ *     tags: [Auth]
+ *     summary: Remove one of the current customer's saved delivery addresses
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: addressId, required: true, schema: { type: integer, minimum: 1 } }
+ *     responses:
+ *       200: { description: Address removed }
+ *       401: { description: Authentication required }
+ *       403: { description: Customer account required }
+ *       404: { description: Address not found }
+ */
+router.get('/addresses', rejectUnknownQuery([]), validate, asyncHandler(async (req, res) => {
+  if (req.user.role !== 'CUSTOMER') {
+    throw httpError(403, 'FORBIDDEN', 'Customer address book is not available for this account.');
+  }
+  const [rows] = await dbQuery(
+    `SELECT id, label, address, is_default, created_at
+     FROM customer_addresses WHERE user_id = ?
+     ORDER BY is_default DESC, id ASC`,
+    [req.user.id],
+  );
+  single(res, rows.map((row) => ({ ...row, is_default: Boolean(row.is_default) })));
+}));
+
+router.post('/addresses', [
+  rejectUnknownQuery([]),
+  rejectUnknownBody(['label', 'address']),
+  body('label').exists().bail().isString().trim().isLength({ min: 1, max: 60 })
+    .withMessage('label must be between 1 and 60 characters.'),
+  body('address').exists().bail().isString().trim().isLength({ min: 1, max: 255 })
+    .withMessage('address must be between 1 and 255 characters.'),
+  validate,
+], asyncHandler(async (req, res) => {
+  if (req.user.role !== 'CUSTOMER') {
+    throw httpError(403, 'FORBIDDEN', 'Only customers can save delivery addresses.');
+  }
+  const saved = await withTransaction(async (connection) => {
+    await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
+    const [existing] = await connection.execute(
+      'SELECT id FROM customer_addresses WHERE user_id = ? ORDER BY id LIMIT 1',
+      [req.user.id],
+    );
+    const isDefault = existing.length === 0;
+    const [result] = await connection.execute(
+      'INSERT INTO customer_addresses (user_id, label, address, is_default) VALUES (?, ?, ?, ?)',
+      [req.user.id, req.body.label, req.body.address, isDefault],
+    );
+    if (isDefault) {
+      await connection.execute('UPDATE users SET address = ? WHERE id = ?', [req.body.address, req.user.id]);
+    }
+    return {
+      id: Number(result.insertId),
+      label: req.body.label,
+      address: req.body.address,
+      is_default: isDefault,
+    };
+  });
+  single(res, saved, 201);
+}));
+
+router.delete('/addresses/:addressId', [
+  positiveId('addressId'),
+  rejectUnknownQuery([]),
+  validate,
+], asyncHandler(async (req, res) => {
+  if (req.user.role !== 'CUSTOMER') {
+    throw httpError(403, 'FORBIDDEN', 'Only customers can remove delivery addresses.');
+  }
+  const removed = await withTransaction(async (connection) => {
+    await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
+    const [rows] = await connection.execute(
+      'SELECT id, is_default FROM customer_addresses WHERE id = ? AND user_id = ? FOR UPDATE',
+      [req.params.addressId, req.user.id],
+    );
+    if (!rows.length) return false;
+    await connection.execute('DELETE FROM customer_addresses WHERE id = ? AND user_id = ?', [req.params.addressId, req.user.id]);
+    if (rows[0].is_default) {
+      const [next] = await connection.execute(
+        'SELECT id, address FROM customer_addresses WHERE user_id = ? ORDER BY id LIMIT 1',
+        [req.user.id],
+      );
+      if (next.length) {
+        await connection.execute('UPDATE customer_addresses SET is_default = TRUE WHERE id = ?', [next[0].id]);
+      }
+      await connection.execute('UPDATE users SET address = ? WHERE id = ?', [next[0]?.address || null, req.user.id]);
+    }
+    return true;
+  });
+  if (!removed) throw httpError(404, 'ADDRESS_NOT_FOUND', 'Address not found.');
+  single(res, { deleted: true });
+}));
 
 /** @openapi
  * /api/me/hotels:
@@ -117,9 +285,87 @@ router.get('/orders/:orderId', [positiveId('orderId'), rejectUnknownQuery([]), v
     'SELECT menu_item_id, item_name, unit_price, quantity, subtotal FROM order_items WHERE order_id = ? AND hotel_id = ? ORDER BY id',
     [req.params.orderId, rows[0].hotel_id],
   );
+  const [feedbackRows] = await dbQuery(
+    'SELECT rating, comment, created_at FROM order_feedback WHERE order_id = ? AND user_id = ? LIMIT 1',
+    [req.params.orderId, req.user.id],
+  );
   const { hotel_name, hotel_slug, hotel_logo_url, ...order } = rows[0];
   single(res, { ...order, status: order.cancelled_at ? 'cancelled' : order.status,
-    hotel: { id: order.hotel_id, name: hotel_name, slug: hotel_slug, logo_url: hotel_logo_url }, items });
+    hotel: { id: order.hotel_id, name: hotel_name, slug: hotel_slug, logo_url: hotel_logo_url },
+    items, feedback: feedbackRows[0] || null });
+}));
+
+/** @openapi
+ * /api/me/orders/{orderId}/feedback:
+ *   post:
+ *     tags: [Orders]
+ *     summary: Submit one rating for an order completed by the current customer
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - { in: path, name: orderId, required: true, schema: { type: integer, minimum: 1 } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [rating]
+ *             properties:
+ *               rating: { type: integer, minimum: 1, maximum: 5 }
+ *               comment: { type: string, maxLength: 2000, nullable: true }
+ *     responses:
+ *       201: { description: Feedback saved }
+ *       400: { description: Invalid rating or comment }
+ *       401: { description: Authentication required }
+ *       403: { description: Customer account required }
+ *       404: { description: Order not found }
+ *       409: { description: Order is not complete or already has feedback }
+ */
+router.post('/orders/:orderId/feedback', [
+  positiveId('orderId'),
+  rejectUnknownQuery([]),
+  rejectUnknownBody(['rating', 'comment']),
+  body('rating').exists().withMessage('rating is required.')
+    .bail().isInt({ min: 1, max: 5 }).toInt()
+    .withMessage('rating must be an integer from 1 to 5.'),
+  body('comment').optional({ nullable: true }).isString().trim().isLength({ max: 2000 })
+    .withMessage('comment must be at most 2000 characters.'),
+  validate,
+], asyncHandler(async (req, res) => {
+  if (req.user.role !== 'CUSTOMER') {
+    throw httpError(403, 'FORBIDDEN', 'Only customers can submit order feedback.');
+  }
+  const [orders] = await dbQuery(
+    'SELECT id, hotel_id, status, cancelled_at FROM orders WHERE id = ? AND user_id = ? LIMIT 1',
+    [req.params.orderId, req.user.id],
+  );
+  if (!orders.length) throw httpError(404, 'ORDER_NOT_FOUND', 'Order not found.');
+  if (orders[0].status !== 'completed' || orders[0].cancelled_at) {
+    throw httpError(409, 'ORDER_NOT_COMPLETED', 'Feedback is available after the order is completed.');
+  }
+  const [existing] = await dbQuery(
+    'SELECT order_id FROM order_feedback WHERE order_id = ? LIMIT 1', [orders[0].id],
+  );
+  if (existing.length) throw httpError(409, 'FEEDBACK_ALREADY_SUBMITTED', 'Feedback has already been submitted.');
+
+  const comment = req.body.comment?.trim() || null;
+  try {
+    await dbQuery(
+      'INSERT INTO order_feedback (order_id, hotel_id, user_id, rating, comment) VALUES (?, ?, ?, ?, ?)',
+      [orders[0].id, orders[0].hotel_id, req.user.id, req.body.rating, comment],
+    );
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      throw httpError(409, 'FEEDBACK_ALREADY_SUBMITTED', 'Feedback has already been submitted.');
+    }
+    throw error;
+  }
+  const [feedback] = await dbQuery(
+    'SELECT rating, comment, created_at FROM order_feedback WHERE order_id = ? AND user_id = ? LIMIT 1',
+    [orders[0].id, req.user.id],
+  );
+  single(res, feedback[0], 201);
 }));
 
 /** @openapi
